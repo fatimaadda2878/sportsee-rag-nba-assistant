@@ -222,7 +222,7 @@ def run_sql_tool(question: str) -> SQLToolOutput:
 
         if not _is_safe_select(generated_sql):
             logger.warning(f"Requête générée rejetée (non-SELECT ou motif interdit): {generated_sql}")
-            logfire.warning("sql_generation_rejected", sql=generated_sql)
+            logfire.info("sql_generation_rejected", sql=generated_sql)
             return SQLToolOutput(
                 generated_sql=generated_sql, row_count=0,
                 error="Requête générée rejetée par les garde-fous de sécurité (SELECT uniquement)."

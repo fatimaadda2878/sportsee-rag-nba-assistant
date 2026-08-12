@@ -15,6 +15,7 @@ règle simple plutôt que de planter.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from typing import Optional
@@ -85,6 +86,17 @@ def route_query(question: str) -> QueryRoute:
             return _heuristic_route(question)
 
         try:
+            # Streamlit exécute le script dans un thread dédié
+            # ('ScriptRunner.scriptThread') sans event loop asyncio par défaut
+            # (Python 3.10+ ne le crée plus implicitement) : pydantic-ai
+            # (agent.run_sync -> asyncio.get_event_loop()) plante sinon avec
+            # "There is no current event loop in thread ...". On s'assure
+            # qu'un event loop existe pour le thread courant avant l'appel.
+            try:
+                asyncio.get_event_loop()
+            except RuntimeError:
+                asyncio.set_event_loop(asyncio.new_event_loop())
+
             agent = _get_router_agent()
             result = agent.run_sync(question)
             route = result.data
@@ -95,5 +107,5 @@ def route_query(question: str) -> QueryRoute:
             return route
         except Exception as e:
             logger.warning(f"Échec du routage via Pydantic AI, fallback heuristique: {e}")
-            logfire.warning("router_fallback_heuristic", error=str(e))
+            logfire.info("router_fallback_heuristic", error=str(e))
             return _heuristic_route(question)

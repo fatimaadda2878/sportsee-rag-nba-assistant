@@ -32,7 +32,7 @@ def run_indexing(input_directory: str, data_url: Optional[str] = None):
         if not documents:
             logging.warning("Aucun document n'a été chargé ou parsé. Vérifiez le contenu du dossier d'entrée.")
             logging.info("--- Processus d'indexation terminé (aucun document traité) ---")
-            logfire.warning("indexing_no_documents", input_directory=input_directory)
+            logfire.info("indexing_no_documents", input_directory=input_directory)
             return
 
         logging.info("Initialisation du gestionnaire de Vector Store...")
@@ -52,7 +52,7 @@ def run_indexing(input_directory: str, data_url: Optional[str] = None):
             )
         else:
             logging.warning("L'index final n'a pas pu être créé ou est vide.")
-            logfire.warning("indexing_empty_result")
+            logfire.info("indexing_empty_result")
 
 
 if __name__ == "__main__":
