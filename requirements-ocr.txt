@@ -1,0 +1,13 @@
+# requirements-ocr.txt
+# Optionnel : active l'OCR de secours pour les PDF scannés sans texte
+# extractible (utils/data_loader.py::extract_text_from_pdf_with_ocr).
+# ⚠️ easyocr installe torch + torchvision (plusieurs Go). À n'installer que
+# si vous avez la place disque et le besoin réel (archives Reddit/rapports
+# scannés en image plutôt qu'en texte).
+#
+# Usage :
+#   pip install -r requirements-ocr.txt
+
+PyMuPDF==1.24.9
+Pillow==10.4.0
+easyocr==1.7.1

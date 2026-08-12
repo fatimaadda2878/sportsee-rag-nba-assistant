@@ -1,0 +1,12 @@
+
+  You can now view your Streamlit app in your browser.
+
+  Local URL: http://localhost:8501
+  Network URL: http://192.168.1.72:8501
+
+Logfire indisponible, bascule sur un no-op logger: No module named 'importlib_metadata'
+C:\Users\adda-\anaconda3\envs\sportsee-rag\Lib\site-packages\pydantic\plugin\_schema_validator.py:40: UserWarning: ModuleNotFoundError while loading the `logfire-plugin` Pydantic plugin, this plugin will not be installed.
+
+ModuleNotFoundError("No module named 'importlib_metadata'")
+  plugins = get_plugins()
+  Stopping...

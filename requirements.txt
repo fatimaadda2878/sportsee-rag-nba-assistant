@@ -1,0 +1,58 @@
+# --- Application ---
+streamlit==1.38.0
+python-dotenv==1.0.1
+
+# --- LLM / Embeddings (Mistral) ---
+# SDK v1.x requis par pydantic-ai[mistral] (l'ancien SDK 0.4.x, utilisé dans le
+# prototype d'origine, a une API incompatible - voir utils/mistral_client.py).
+mistralai>=1.2.5,<2
+
+# --- Vector store & chunking ---
+faiss-cpu==1.8.0
+numpy==1.26.4
+langchain==0.2.16
+langchain-core==0.2.38
+langchain-community==0.2.16
+
+# --- Validation des données (pipeline RAG + SQL) ---
+# pydantic-ai-slim (dépendance de pydantic-ai) exige pydantic>=2.10 :
+# on ne fige donc plus pydantic à 2.9.2 (conflit), on laisse pip choisir >=2.10,<3.
+pydantic>=2.10,<3
+# IMPORTANT: "pydantic-ai" (package complet) installe TOUS les SDK fournisseurs
+# (openai, anthropic, groq, vertexai/google-auth...) même si on n'utilise que
+# Mistral - plusieurs centaines de Mo inutiles. On installe donc la variante
+# "slim" avec seulement l'extra [mistral].
+pydantic-ai-slim[mistral]>=0.0.14
+pydantic-settings==2.5.2
+griffe>=1.0
+
+# --- Observabilité ---
+logfire==0.51.0
+
+# --- Base de données / SQL Tool ---
+SQLAlchemy==2.0.35
+# psycopg2-binary==2.9.9   # décommenter si PostgreSQL au lieu de SQLite
+
+# --- Ingestion Excel ---
+pandas==2.2.2
+openpyxl==3.1.5
+
+# --- Extraction de documents sources (PDF/DOCX) ---
+PyPDF2==3.0.1
+python-docx==1.1.2
+tqdm==4.66.5
+requests==2.32.3
+# OCR (PyMuPDF, Pillow, easyocr -> torch/torchvision, plusieurs Go) : optionnel,
+# utilisé uniquement en fallback si un PDF scanné ne contient pas de texte
+# extractible (voir utils/data_loader.py, déjà tolérant à leur absence).
+# Installer seulement si besoin et si l'espace disque le permet :
+#   pip install -r requirements-ocr.txt
+
+# --- Évaluation RAGAS ---
+ragas==0.1.19
+datasets==2.21.0
+# Juge RAGAS (LLM + embeddings) sur Mistral plutôt que le défaut OpenAI de ragas :
+langchain-mistralai==0.1.13
+
+# --- Tests ---
+pytest==8.3.3
