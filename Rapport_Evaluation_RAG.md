@@ -44,6 +44,7 @@ Recherche vectorielle (FAISS)          SQL Tool (NL → SQL few-shot)
 | `utils/vector_store.py` | Recherche vectorielle (top-k=5) dans l'index FAISS |
 | `MistralChat.py` | Application Streamlit (UI + orchestration) |
 | `evaluate_ragas.py` | Script d'audit RAGAS, modes `before` (texte seul) et `after` (texte + SQL Tool) |
+| `tests/test_guardrails.py` | Tests unitaires (pytest) du routeur, du SQL Tool et des garde-fous de validation — complémentaire à l'évaluation RAGAS ci-dessus, sans appel LLM ni base de données |
 | `utils/observability.py` | Instrumentation Pydantic Logfire (traçage de chaque étape : chunking, recherche vectorielle, appel SQL, génération) |
 
 **Sources de données** :
@@ -67,6 +68,8 @@ Recherche vectorielle (FAISS)          SQL Tool (NL → SQL few-shot)
 | `hors_perimetre` | T12 | Question hors sujet NBA, doit être déclinée poliment |
 
 Les questions T01 à T05 et T11 ont été construites (et vérifiées manuellement) à partir du contenu réel des threads Reddit indexés, avec les vrais noms d'équipes et de joueurs cités par les fans (Orlando Magic — Paolo Banchero, Franz Wagner ; Minnesota Timberwolves — Anthony Edwards ; Detroit Pistons — Cade Cunningham ; Indiana Pacers — Tyrese Haliburton, Pascal Siakam ; Oklahoma City Thunder), plutôt que des `ground_truth` génériques, afin que l'évaluation RAGAS soit comparée à une vérité de terrain fiable.
+
+⚠️ **Couverture réelle des runs conservés** : les fichiers `reports/eval_before.csv` et `reports/eval_after.csv` actuellement sur le dépôt ne couvrent pas exactement les mêmes 13 cas. `T08` est absent du run `before` (11 cas exploités), et `T10b` est absent des deux runs (12 cas exploités en `after`). Les moyennes de la section 4 sont calculées sur les lignes réellement présentes dans ces CSV, pas sur les 13 cas théoriques — voir section 5.3 pour l'impact sur la comparaison.
 
 ### 3.2 Métriques RAGAS retenues
 
@@ -97,38 +100,46 @@ Plusieurs obstacles techniques ont été rencontrés et résolus pendant la mise
 
 ### 4.1 Tableau comparatif before / after
 
-| Métrique | Before (texte seul) | After (texte + SQL Tool) | Delta |
+Moyennes recalculées directement à partir des fichiers `reports/eval_before.csv` (11 cas, `T08` absent) et `reports/eval_after.csv` (12 cas, `T10b` absent) actuellement dans le dépôt :
+
+| Métrique | Before — n=11 | After — n=12 | Delta |
 |---|---|---|---|
-| faithfulness | 0,817 | 0,649 | -0,17 |
-| answer_relevancy | 0,327 | 0,652 | **+0,33** |
-| context_precision | 0,358 | 0,443 | **+0,09** |
-| context_recall | 0,385 | 0,577 | **+0,19** |
+| faithfulness | 0,783 | 0,648 | -0,135 |
+| answer_relevancy | 0,357 | 0,626 | **+0,269** |
+| context_precision | 0,405 | 0,466 | **+0,061** |
+| context_recall | 0,364 | 0,542 | **+0,178** |
 
-*(Résultats du run final, post-corrections listées en 3.3, sur les 13 cas de test de `tests/test_questions.py`.)*
+*(Recalcul du 17/08/2026 à partir des CSV existants, tailles d'échantillon before/after non identiques — voir 5.3.)*
 
-### 4.2 Analyse détaillée
+### 4.2 Analyse détaillée (exemples vérifiés ligne par ligne dans les CSV)
 
-**Ce qui s'améliore avec le SQL Tool** — `answer_relevancy`, `context_precision` et `context_recall` progressent tous nettement. Le `context_recall` est le résultat le plus significatif : il confirme que les questions chiffrées (T06, T07, T10, T10b) et mixtes (T11) ne sont tout simplement pas répondables correctement avec le texte seul, et que l'ajout de la base SQL comble ce manque, conformément à l'objectif métier. Exemple : sur T10 (top 3 passeurs), le SQL Tool renvoie un classement exact (mentionnant notamment Trae Young) que le contexte texte seul ne pourrait jamais fournir.
+**Ce qui s'améliore avec le SQL Tool** — `answer_relevancy`, `context_precision` et `context_recall` progressent tous nettement, confirmant que les questions chiffrées et mixtes ne sont pas répondables correctement avec le texte seul.
 
-**La baisse de `faithfulness` : un artefact de mesure, pas une régression réelle.** En isolant les scores par question, cette baisse est concentrée sur les questions chiffrées, pas sur les questions texte (T01, T03, T04 ont des scores quasi identiques before/after, cohérent avec le fait que le SQL Tool ne s'y déclenche pas). Exemple concret sur T07 (*« Quelle est la moyenne de rebonds par match ? »*) : le SQL Tool renvoie `avg_rebounds_per_game: 3.6`, l'application répondait initialement `"3.6"` — une réponse exacte et intégralement sourcée du contexte, mais notée `faithfulness = 0.0` par RAGAS, car l'étape de décomposition en affirmations du juge ne parvient pas à traiter un nombre isolé sans phrase. Ce point a été corrigé en cours de projet (voir 3.3, point 5) ; les scores ci-dessus intègrent déjà ce correctif, mais restent sensibles à la formulation exacte des réponses chiffrées — une limite à surveiller plutôt qu'un défaut définitivement clos.
+**Un exemple d'hallucination en mode `before`, T02 (vérifié)** : à la question *« Que disent les fans du duo de jeunes ailiers évoqué dans les threads playoffs ? »*, le système en mode texte seul répond en citant **Anthony Edwards et Jaden McDaniels (Wolves)**, alors que le duo réellement évoqué dans le thread indexé est **Paolo Banchero et Franz Wagner (Orlando Magic)**. `context_recall = 0.0` : le retrieval n'a jamais récupéré le bon chunk, noyé parmi des chunks d'un autre thread (débat statistique sur Reggie Miller) sans rapport avec la question. Exemple probant des limites du prototype texte seul, à conserver pour la soutenance.
 
-**Un cas de test à corriger : T06.** La question *« Combien de points au total un joueur donné a-t-il marqués cette saison régulière ? »* ne nomme aucun joueur précis. Le SQL Tool répond, à raison, qu'il manque l'information nécessaire — mais ce comportement correct est pénalisé par les métriques de pertinence/recall, car ce n'est pas une question réellement testable telle que formulée. Recommandation : reformuler T06 avec un nom de joueur explicite avant toute nouvelle campagne d'évaluation.
+**Un biais de retrieval qui persiste même avec le SQL Tool, T11 (vérifié)** : sur la question mixte *« Le joueur qui impressionne le plus les fans en playoffs a-t-il aussi les meilleures stats à 3 points ? »*, la recherche vectorielle ne récupère que des chunks du débat "Reggie Miller GOAT", sans lien avec la question. La réponse générée identifie donc à tort **Reggie Miller** comme le joueur qui impressionne le plus les fans, et admet ne pas avoir les stats à 3 points en playoffs. `context_precision = 0.0` et `context_recall = 0.0` : ajouter le SQL Tool n'aide pas si la recherche textuelle en amont ramène le mauvais contexte — la qualité du retrieval reste un facteur limitant pour les questions mixtes.
 
-**Un exemple d'hallucination corrigée par un meilleur diagnostic (mode `before`), T02** : à la question *« Que disent les fans du duo de jeunes ailiers évoqué dans les threads playoffs ? »*, le système en mode texte seul a répondu en citant **Anthony Edwards et Jaden McDaniels (Wolves)** — alors que le duo réellement évoqué dans le thread est **Paolo Banchero et Franz Wagner (Orlando Magic)**. Le `context_recall` de cette question est de 0.0 : le retrieval n'a jamais récupéré le bon chunk contenant l'extrait pertinent (noyé parmi des chunks issus d'un autre thread, sur Reggie Miller, sans rapport). C'est un exemple concret et probant des limites du prototype "avant SQL Tool", à conserver comme illustration en soutenance.
+**Une hallucination du SQL Tool lui-même, T06 (vérifié)** : la question *« Combien de points au total un joueur donné a-t-il marqués cette saison régulière ? »* ne nomme aucun joueur. Au lieu de renvoyer `NO_DATA` ou de demander une précision, le générateur SQL a produit `WHERE player_name = 'LeBron James'` de sa propre initiative et l'application a répondu avec ce chiffre comme si la question l'avait demandé. C'est un vrai défaut de garde-fou (le SQL Tool devrait détecter l'ambiguïté et refuser plutôt qu'inventer un joueur), cohérent avec le score `context_recall = 0.0` de cette question. **Recommandation : ajouter une vérification explicite dans `sql_tool.py` pour rejeter/signaler les requêtes générées contenant une valeur (nom de joueur, équipe...) non présente dans la question d'origine.**
 
-### 4.3 Stabilité des résultats
+**`faithfulness` reste à 0 sur les réponses chiffrées même reformulées en phrase complète, T07 (vérifié)** : malgré le correctif imposant une réponse en phrase complète (voir 3.3, point 5), la réponse *« La moyenne de rebonds par match, toutes équipes confondues, est de 3.6. »* — exacte et directement issue du résultat SQL fourni en contexte — obtient tout de même `faithfulness = 0.0`. Le correctif du prompt n'a donc pas suffi à lui seul ; la métrique `faithfulness` de RAGAS reste fragile sur les réponses purement chiffrées sourcées par SQL, à traiter comme une limite de la métrique plutôt qu'un signal fiable sur ce cas précis.
 
-L'évaluation ayant été exécutée plusieurs fois pendant le développement, une variance a été observée d'un run à l'autre (échantillon de seulement 13 questions, juge LLM non strictement déterministe malgré `temperature=0.0`) :
+**Les refus `NO_DATA` sont corrects mais mal notés par RAGAS, T08 et T09 (correction d'une erreur du rapport précédent)** : sur ces deux cas volontairement irréalisables, le système répond correctement et clairement que la donnée n'est pas disponible (ex. T08 : *« La donnée n'est pas disponible dans la base actuelle, car les statistiques ne sont fournies qu'à l'échelle de la saison entière et non par match. »*), conformément au comportement attendu. **Contrairement à une version précédente de ce rapport, les scores `faithfulness` mesurés ne sont pas de 1,0 mais de 0,0 pour ces deux cas** : la métrique RAGAS peine à évaluer une réponse de refus, qui ne "cite" pas le contexte texte fourni (puisqu'elle explique une limite de la base plutôt que d'en extraire une information). Le comportement métier est correct ; c'est la métrique qui n'est pas adaptée à ce type de réponse — point à documenter comme limite méthodologique plutôt qu'à corriger dans le code.
+
+**Une anomalie de données révélée par le SQL Tool, T10 (vérifié)** : sur *« Quels sont les 3 meilleurs passeurs en moyenne par match... »*, la requête générée (`ORDER BY ast_per_game DESC LIMIT 3`) renvoie **trois fois la même ligne : Trae Young, 11,6 passes**, au lieu de 3 joueurs distincts. La réponse générée reflète fidèlement ce résultat (*« Trae Young... suivi du même Trae Young... et enfin Trae Young »*), d'où un `faithfulness = 1.0` malgré un résultat manifestement incohérent. Cause probable : des lignes dupliquées pour un même joueur dans `player_season_stats` (le schéma prévoit une ligne par passage en équipe, voir `docs/sql_examples.md`). **Recommandation : dédupliquer par `player_name` (ex. `GROUP BY` ou `DISTINCT` sur le nom) dans les requêtes de classement du SQL Tool.**
+
+### 4.3 Suivi des runs intermédiaires
+
+L'évaluation a été exécutée plusieurs fois pendant le développement ; les runs intermédiaires ci-dessous (non conservés en CSV) illustrent la tendance observée avant les derniers correctifs :
 
 | Run | faithfulness | answer_relevancy | context_precision | context_recall |
 |---|---|---|---|---|
-| Before (1) | 0,796 | 0,301 | 0,271 | 0,385 |
-| Before (2) | 0,817 | 0,327 | 0,358 | 0,385 |
-| After (1) | 0,725 | 0,496 | 0,409 | 0,615 |
-| After (2) | 0,666 | 0,501 | 0,443 | 0,577 |
-| After (3, final) | 0,649 | 0,652 | 0,443 | 0,577 |
+| Before (intermédiaire 1) | 0,796 | 0,301 | 0,271 | 0,385 |
+| After (intermédiaire 1) | 0,725 | 0,496 | 0,409 | 0,615 |
+| After (intermédiaire 2) | 0,666 | 0,501 | 0,443 | 0,577 |
+| **Before (final, CSV conservé)** | **0,783** | **0,357** | **0,405** | **0,364** |
+| **After (final, CSV conservé)** | **0,648** | **0,626** | **0,466** | **0,542** |
 
-Le sens des écarts (recall et precision toujours en hausse en mode `after`, `context_recall` toujours en dessous de 0,4 en mode `before`) reste stable d'un run à l'autre, ce qui donne confiance dans la conclusion générale malgré la variance sur les valeurs absolues. Un échantillon plus large (>13 questions) réduirait cette variance et est recommandé pour une évaluation en production.
+Le sens des écarts (`answer_relevancy`, `context_precision` et `context_recall` toujours en hausse en mode `after`) reste stable d'un run à l'autre, ce qui donne confiance dans la conclusion générale malgré la variance sur les valeurs absolues et la taille d'échantillon réduite (11-12 questions selon le run). Un échantillon plus large et une couverture strictement identique entre `before` et `after` réduiraient cette variance et sont recommandés pour une évaluation en production.
 
 ## 5. Limites
 
@@ -138,7 +149,7 @@ Le fichier `regular_NBA.xlsx` contient des **statistiques agrégées sur la sais
 - « Quel joueur a le meilleur % à 3 points sur les 5 derniers matchs ? »
 - « Compare les rebonds de l'équipe à domicile et à l'extérieur. »
 
-Le SQL Tool est conçu pour détecter ce cas et répondre `NO_DATA` plutôt que d'halluciner un résultat approximatif (vérifié par les cas de test T08/T09, tous deux avec `faithfulness = 1.0`, confirmant que le système admet correctement la limite). Si ces cas d'usage restent prioritaires, il faudra obtenir de Sarah un fichier à granularité match par match.
+Le SQL Tool est conçu pour détecter ce cas et répondre `NO_DATA` plutôt que d'halluciner un résultat approximatif. Vérifié par les cas de test T08/T09 : le système répond bien par un refus explicite et correct dans les deux cas (voir 4.2), même si la métrique `faithfulness` RAGAS les note à 0,0 (limite de la métrique sur les réponses de refus, pas un défaut du comportement métier). Si ces cas d'usage restent prioritaires, il faudra obtenir de Sarah un fichier à granularité match par match.
 
 ### 5.2 Limites de l'évaluation RAGAS
 
@@ -150,6 +161,8 @@ Le SQL Tool est conçu pour détecter ce cas et répondre `NO_DATA` plutôt que 
 ### 5.3 Limites de l'échantillon de test
 
 13 questions est un échantillon volontairement restreint pour un prototype, suffisant pour un premier audit avant/après mais insuffisant pour une évaluation statistiquement robuste en production. Il ne couvre pas non plus la robustesse à un changement de corpus (nouveaux threads Reddit) ou de modèle de génération — deux axes de sensibilité à anticiper (voir section 6).
+
+De plus, la comparaison before/after actuellement disponible n'est **pas strictement appariée** : `T08` (complexe_chiffre, cas `NO_DATA`) est absent du run `before` conservé, et `T10b` (complexe_chiffre) est absent des deux runs. Les moyennes de la section 4.1 portent donc sur 11 questions en `before` et 12 en `after`, pas sur les 13 mêmes questions. La tendance générale (progression de `answer_relevancy`, `context_precision`, `context_recall`) reste cohérente sur les runs intermédiaires disponibles (voir 4.3), mais une comparaison rigoureuse nécessiterait de relancer `evaluate_ragas.py --mode before` et `--mode after` sur exactement les mêmes 13 cas avant toute publication de ces chiffres en production.
 
 ## 6. Choix techniques et sensibilité du système (éléments de discussion)
 
@@ -165,16 +178,20 @@ Le SQL Tool est conçu pour détecter ce cas et répondre `NO_DATA` plutôt que 
 
 ## 7. Conclusion et recommandations
 
-L'ajout du SQL Tool améliore mesurablement le système sur 3 des 4 métriques RAGAS (answer_relevancy, context_precision, context_recall), confirmant l'intérêt de l'enrichissement chiffré pour répondre aux besoins métier de Sarah. La baisse apparente de `faithfulness` a été investiguée et attribuée principalement à une limite de mesure sur les réponses chiffrées courtes, plutôt qu'à une dégradation réelle de la qualité — un point à surveiller lors des prochaines évaluations plutôt qu'un signal d'alerte.
+L'ajout du SQL Tool améliore mesurablement le système sur 3 des 4 métriques RAGAS (answer_relevancy +0,269, context_precision +0,061, context_recall +0,178), confirmant l'intérêt de l'enrichissement chiffré pour répondre aux besoins métier de Sarah. La baisse de `faithfulness` (-0,135) a été investiguée cas par cas (section 4.2) : elle recouvre à la fois une limite de la métrique RAGAS sur les réponses de refus (`NO_DATA`, T08/T09) et sur les réponses chiffrées courtes (T07), mais aussi un vrai défaut applicatif détecté pendant cette évaluation — le SQL Tool peut halluciner une valeur non demandée (T06, joueur non précisé) plutôt que de refuser, et peut restituer fidèlement un résultat SQL en réalité dupliqué (T10). Ces deux derniers points sont des bugs réels à corriger, pas de simples artefacts de mesure.
 
 **Recommandations pour la suite** :
-1. Reformuler le cas de test T06 (nommer un joueur précis).
-2. Élargir le jeu de test au-delà de 13 questions pour fiabiliser les scores absolus.
-3. Obtenir de Sarah un fichier à granularité match par match si les cas d'usage "5 derniers matchs" / "domicile-extérieur" restent prioritaires.
-4. Configurer `LOGFIRE_TOKEN` en environnement de production pour un suivi continu des performances.
-5. Reproduire cette évaluation à chaque changement significatif de corpus ou de modèle de génération.
+1. Corriger `utils/sql_tool.py` pour rejeter/signaler une requête générée contenant une valeur (nom de joueur, équipe...) absente de la question d'origine (voir T06).
+2. Dédupliquer les résultats de classement du SQL Tool par `player_name` pour éviter les doublons de type "top 3 = même joueur 3 fois" (voir T10).
+3. Reformuler le cas de test T06 avec un nom de joueur explicite, et aligner strictement la couverture `before`/`after` (actuellement 11 vs 12 cas sur 13, voir 5.3) avant toute nouvelle campagne de mesure.
+4. Élargir le jeu de test au-delà de 13 questions pour fiabiliser les scores absolus.
+5. Obtenir de Sarah un fichier à granularité match par match si les cas d'usage "5 derniers matchs" / "domicile-extérieur" restent prioritaires.
+6. Configurer `LOGFIRE_TOKEN` en environnement de production pour un suivi continu des performances.
+7. Reproduire cette évaluation à chaque changement significatif de corpus ou de modèle de génération.
 
 ## Annexe — Jeu de questions de test complet
+
+Les 13 cas ci-dessous sont définis dans `tests/test_questions.py`. Seuls `T08` (absent du run `before` conservé) et `T10b` (absent des deux runs conservés) n'apparaissent pas dans les résultats chiffrés de la section 4 — voir 5.3.
 
 | ID | Catégorie | Question |
 |---|---|---|
