@@ -331,6 +331,36 @@ Après correction, plusieurs traces `handle_user_question` ont été
 observées avec succès dans Logfire sans nouvelle exception liée à ces
 problèmes.
 
+**3. Routage Pydantic AI systématiquement en échec silencieux**
+
+`pydantic-ai` a renommé le paramètre `result_type` de `Agent(...)` en
+`output_type` (et `.data` en `.output` sur le résultat) dans une version
+plus récente que celle utilisée à l'écriture du code. L'ancien nom ne
+provoquait pas de plantage direct, mais faisait échouer l'agent à chaque
+appel — rattrapé silencieusement par le fallback heuristique de
+`router.py`. Le routage LLM ne s'exécutait donc jamais réellement avant
+cette correction. Corrigé dans `utils/router.py`.
+
+**4. Base `player_season_stats` triplée par une ingestion non idempotente**
+
+`load_excel_to_db.py::load_player_season_stats` insérait les lignes sans
+purger la table au préalable, contrairement aux deux autres tables
+(`teams`, `team_summary`) qui utilisent `session.merge()`. Relancer le
+script plusieurs fois empilait donc les stats joueurs au lieu de les
+remplacer : la base contenait 1707 lignes pour 569 joueurs réels
+(exactement × 3). Corrigé en purgeant la table avant chaque réinsertion —
+voir aussi `Rapport_Evaluation_RAG.md` pour l'impact sur l'évaluation
+RAGAS (cas de test T10).
+
+**5. Script d'évaluation interrompu par une erreur transitoire de l'API**
+
+`evaluate_ragas.py` n'avait aucune tolérance aux pannes réseau (ex. `503
+Service Unavailable` côté Mistral) : un seul appel en échec faisait
+perdre tout le run. Ajout d'un retry avec backoff dans
+`utils/mistral_client.py`, et d'un retry ciblé côté juge RAGAS pour les
+questions notées `NaN` (échec de notation silencieux) dans
+`evaluate_ragas.py`.
+
 ------------------------------------------------------------------------
 
 # 🧪 Évaluation RAGAS
@@ -386,65 +416,54 @@ Quatre métriques sont calculées :
 
 ### Scores moyens
 
+Comparaison finale (17/08/2026), strictement appariée sur les 13 cas de
+test et les 4 métriques, sans valeur manquante des deux côtés :
+
   Métrique              Before --- texte seul   After --- routage + SQL   Évolution
   ------------------- ----------------------- ------------------------- -----------
-  Faithfulness                       **0,78**                      0,65       -0,13
-  Answer Relevancy                       0,36                  **0,63**   **+0,27**
-  Context Precision                      0,40                  **0,47**       +0,07
-  Context Recall                         0,36                  **0,54**   **+0,18**
+  Faithfulness                       **0,867**                     0,755       -0,112
+  Answer Relevancy                       0,295                 **0,649**   **+0,353**
+  Context Precision                      0,274                 **0,351**   **+0,077**
+  Context Recall                         0,346                 **0,615**   **+0,269**
+
+Détail complet des reproductions de run, des cas de figure et de
+l'analyse question par question : voir `Rapport_Evaluation_RAG.md`
+(sections 4 et 5).
 
 ### Interprétation
 
 L'ajout du routage et du SQL Tool améliore fortement la **pertinence des
-réponses** :
+réponses** et le **rappel du contexte** :
 
 ``` text
-Answer Relevancy : 0,36 → 0,63
-```
-
-Le **Context Recall** progresse également :
-
-``` text
-Context Recall : 0,36 → 0,54
+Answer Relevancy : 0,295 → 0,649
+Context Recall   : 0,346 → 0,615
 ```
 
 Le système enrichi récupère donc mieux les informations nécessaires,
 notamment pour les questions chiffrées pour lesquelles une recherche
-textuelle seule est insuffisante.
+textuelle seule est insuffisante. La **Context Precision** progresse
+aussi, plus modestement (0,274 → 0,351).
 
-La **Context Precision** progresse plus modestement :
-
-``` text
-Context Precision : 0,40 → 0,47
-```
-
-La **Faithfulness** diminue en revanche :
-
-``` text
-Faithfulness : 0,78 → 0,65
-```
-
-Cette baisse doit être interprétée avec prudence. Sur certaines
-questions numériques, notamment `T07` et `T09`, le juge RAGAS a attribué
-un score nul en mode `after`. Une explication possible est que les
-valeurs numériques générées depuis le SQL Tool ne sont pas toujours
-reconnues par le juge de la même manière qu'un contexte textuel
-classique.
+La **Faithfulness** diminue en revanche (0,867 → 0,755). Cette baisse a
+été analysée cas par cas (voir `Rapport_Evaluation_RAG.md`, section 4.2)
+et s'explique par une combinaison de facteurs : une limite du juge RAGAS
+sur les réponses de refus (`NO_DATA`, cas `T08`/`T09`) et sur certaines
+réponses chiffrées courtes (`T07`), ainsi qu'un vrai défaut applicatif
+encore ouvert sur `T06` (le SQL Tool peut inventer un joueur non précisé
+dans la question plutôt que de refuser — voir la piste d'amélioration
+correspondante ci-dessous).
 
 ------------------------------------------------------------------------
 
 ## ⚠️ Limites de l'évaluation
 
-### Couverture before / after non strictement identique
+### Couverture before / after
 
-Les CSV d'évaluation obtenus présentent deux écarts :
-
--   `T08` est absent du résultat `before` ;
--   `T10b` n'apparaît dans aucun des deux résultats.
-
-La comparaison des moyennes donne donc une tendance utile, mais ne
-constitue pas une comparaison parfaitement appariée question par
-question.
+Après plusieurs itérations (voir `Rapport_Evaluation_RAG.md`, section
+4.3), les CSV `before` et `after` couvrent désormais les mêmes 13 cas de
+test, sur les 4 métriques, sans valeur manquante — la comparaison
+ci-dessus est donc strictement appariée.
 
 ### RAGAS avec Mistral
 

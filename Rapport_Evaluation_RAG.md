@@ -51,7 +51,7 @@ Recherche vectorielle (FAISS)          SQL Tool (NL → SQL few-shot)
 - 4 threads Reddit r/nba (discussions sur les playoffs, sentiment des fans, débats statistiques) → indexés dans `inputs/`
 - `regular_NBA.xlsx` : statistiques agrégées de la saison régulière, 30 équipes et 569 lignes joueur/passage en équipe pour une exécution propre de l'ingestion (validé le 11/08/2026)
 
-⚠️ **Bug de duplication détecté et corrigé le 17/08/2026** : `load_excel_to_db.py::load_player_season_stats` ne purgeait pas la table avant réinsertion (contrairement aux deux autres tables). Vérification directe sur la base utilisée pour cette évaluation : `SELECT COUNT(*) FROM player_season_stats` renvoyait **1707** lignes, soit exactement 569 × 3 — la table avait été remplie par 3 exécutions successives du script sans purge. Ce constat éclaire directement l'anomalie relevée sur T10 en section 4.2 (voir ci-dessous). Le script a été corrigé pour vider la table avant chaque rechargement ; **les résultats RAGAS de ce rapport ont été mesurés sur la base non corrigée (1707 lignes)**, une nouvelle campagne après correction est recommandée (voir section 7).
+⚠️ **Bug de duplication détecté et corrigé le 17/08/2026** : `load_excel_to_db.py::load_player_season_stats` ne purgeait pas la table avant réinsertion (contrairement aux deux autres tables). Vérification directe sur la base utilisée initialement pour cette évaluation : `SELECT COUNT(*) FROM player_season_stats` renvoyait **1707** lignes, soit exactement 569 × 3 — la table avait été remplie par 3 exécutions successives du script sans purge. Ce constat éclairait directement l'anomalie relevée sur T10 en section 4.2. Le script a été corrigé pour vider la table avant chaque rechargement, la base a été régénérée (569 lignes), et **le mode `after` a été rejoué sur la base corrigée le 17/08/2026** — les chiffres de la section 4.1 reflètent ce run régénéré, et T10 est confirmé corrigé (voir 4.2).
 
 ## 3. Méthodologie d'évaluation
 
@@ -71,7 +71,7 @@ Recherche vectorielle (FAISS)          SQL Tool (NL → SQL few-shot)
 
 Les questions T01 à T05 et T11 ont été construites (et vérifiées manuellement) à partir du contenu réel des threads Reddit indexés, avec les vrais noms d'équipes et de joueurs cités par les fans (Orlando Magic — Paolo Banchero, Franz Wagner ; Minnesota Timberwolves — Anthony Edwards ; Detroit Pistons — Cade Cunningham ; Indiana Pacers — Tyrese Haliburton, Pascal Siakam ; Oklahoma City Thunder), plutôt que des `ground_truth` génériques, afin que l'évaluation RAGAS soit comparée à une vérité de terrain fiable.
 
-⚠️ **Couverture réelle des runs conservés** : les fichiers `reports/eval_before.csv` et `reports/eval_after.csv` actuellement sur le dépôt ne couvrent pas exactement les mêmes 13 cas. `T08` est absent du run `before` (11 cas exploités), et `T10b` est absent des deux runs (12 cas exploités en `after`). Les moyennes de la section 4 sont calculées sur les lignes réellement présentes dans ces CSV, pas sur les 13 cas théoriques — voir section 5.3 pour l'impact sur la comparaison.
+✅ **Couverture réelle des runs conservés (mise à jour du 17/08/2026)** : après plusieurs itérations (voir 4.3), les fichiers `reports/eval_before.csv` et `reports/eval_after.csv` actuellement sur le dépôt couvrent désormais les mêmes 13 cas, avec un score sur les 4 métriques RAGAS pour chacun (aucune ligne ni cellule manquante). Les moyennes de la section 4 portent donc sur l'intégralité du jeu de test.
 
 ### 3.2 Métriques RAGAS retenues
 
@@ -96,22 +96,28 @@ Plusieurs obstacles techniques ont été rencontrés et résolus pendant la mise
 2. **Rate limiting Mistral** : la parallélisation par défaut de RAGAS (jusqu'à ~16 appels juge simultanés) déclenchait des rafales de `429 Too Many Requests`, faisant échouer certains jobs après épuisement des retries. Résolu via un `RunConfig` dédié (`max_workers=2`, `max_retries=20`, `max_wait=45`, `timeout=300`) pour respecter le débit autorisé par le compte utilisé.
 3. **`answer_relevancy` systématiquement `NaN`** : cette métrique génère par défaut 3 variantes de réponse en une seule requête (`strictness=3`, mode multi-complétions), mal supporté par `ChatMistralAI` contrairement à OpenAI (cible d'origine de RAGAS). Résolu en réduisant `strictness=1`.
 4. **`contexts` incomplet en mode `after`** : seule la requête SQL générée était initialement passée à RAGAS comme contexte, sans les résultats retournés — le juge ne pouvait donc pas vérifier les chiffres cités dans la réponse, faussant `faithfulness` à la baisse. Corrigé en incluant aussi les lignes de résultat (`rows_preview`) dans le contexte transmis à RAGAS.
-5. **Réponses chiffrées trop laconiques** : sur certaines questions purement chiffrées, l'application répondait par un nombre isolé (ex. `"3.6"`), ce que l'étape de décomposition en affirmations de `faithfulness` peine à évaluer, produisant un score de 0 malgré une réponse exacte. Corrigé en imposant, dans le prompt système, une réponse toujours formulée en phrase complète.
+5. **Réponses chiffrées trop laconiques** : sur certaines questions purement chiffrées, l'application répondait par un nombre isolé (ex. `"3.6"`), ce que l'étape de décomposition en affirmations de `faithfulness` peine à évaluer, produisant un score de 0 malgré une réponse exacte. Corrigé en imposant, dans le prompt système, une réponse toujours formulée en phrase complète (amélioration partielle, voir T07 en 4.2).
+6. **Routage Pydantic AI systématiquement en échec silencieux** : `pydantic-ai` a renommé le paramètre `result_type` de `Agent(...)` en `output_type` (et `.data` en `.output` sur le résultat) dans une version plus récente que celle utilisée initialement. L'ancien nom ne provoquait pas de plantage direct mais faisait échouer l'agent à chaque appel, rattrapé silencieusement par le fallback heuristique de `router.py` — le routage LLM ne s'est donc jamais réellement exécuté avant cette correction (17/08/2026), y compris pour les résultats initiaux de ce rapport. Corrigé, voir `utils/router.py`.
+7. **Script interrompu par une erreur transitoire de l'API Mistral** (`503 Service Unavailable`) : `evaluate_ragas.py` n'avait aucune tolérance aux pannes réseau côté génération, un seul appel en échec faisant perdre tout le run sur les 13 questions. Ajout d'un retry avec backoff (3 tentatives) dans `utils/mistral_client.py` pour les erreurs transitoires (503/502/504/429/timeout).
 
 ## 4. Résultats
 
 ### 4.1 Tableau comparatif before / after
 
-Moyennes recalculées directement à partir des fichiers `reports/eval_before.csv` (11 cas, `T08` absent) et `reports/eval_after.csv` (12 cas, `T10b` absent) actuellement dans le dépôt :
+`reports/eval_before.csv` et `reports/eval_after.csv` ont tous les deux été régénérés le 17/08/2026 sur les **13 cas de test au complet, avec un score sur les 4 métriques pour les 13 questions des deux côtés (13/13, sans NaN)**. C'est la première comparaison de ce rapport strictement appariée, aussi bien au niveau des questions que des métriques.
 
-| Métrique | Before — n=11 | After — n=12 | Delta |
+Un premier run `before` avait laissé 2 métriques en échec de notation par le juge (`NaN` sur `answer_relevancy`/T03 et `faithfulness`/T04) — un aléa d'appel API côté juge, pas un problème structurel de ces questions (voir 5.2 pour le détail, et le correctif de retry automatique ajouté dans `evaluate_ragas.py`). Un second run `before` a résolu ces deux échecs :
+
+| Métrique | Before (n=13/13) | After (n=13/13) | Delta |
 |---|---|---|---|
-| faithfulness | 0,783 | 0,648 | -0,135 |
-| answer_relevancy | 0,357 | 0,626 | **+0,269** |
-| context_precision | 0,405 | 0,466 | **+0,061** |
-| context_recall | 0,364 | 0,542 | **+0,178** |
+| faithfulness | 0,867 | 0,755 | -0,112 |
+| answer_relevancy | 0,295 | 0,649 | **+0,353** |
+| context_precision | 0,274 | 0,351 | **+0,077** |
+| context_recall | 0,346 | 0,615 | **+0,269** |
 
-*(Recalcul du 17/08/2026 à partir des CSV existants, tailles d'échantillon before/after non identiques — voir 5.3.)*
+*(Régénérés le 17/08/2026, comparaison finale retenue pour ce rapport.)*
+
+Les 4 métriques bougent désormais dans le sens attendu par rapport aux runs intermédiaires (voir 4.3) : `answer_relevancy`, `context_precision` et `context_recall` progressent tous en mode `after`, confirmant l'apport du SQL Tool. `faithfulness` reste plus élevée en `before` (0,867 vs 0,755) : cet écart est réel (mesuré sur un échantillon désormais complet des deux côtés) et discuté cas par cas ci-dessous (T06, T07, T08, T09) — il s'explique par une combinaison de limites de la métrique RAGAS sur les réponses courtes/de refus et par un vrai bug applicatif encore ouvert (T06), pas par une dégradation générale de la qualité des réponses.
 
 ### 4.2 Analyse détaillée (exemples vérifiés ligne par ligne dans les CSV)
 
@@ -121,13 +127,13 @@ Moyennes recalculées directement à partir des fichiers `reports/eval_before.cs
 
 **Un biais de retrieval qui persiste même avec le SQL Tool, T11 (vérifié)** : sur la question mixte *« Le joueur qui impressionne le plus les fans en playoffs a-t-il aussi les meilleures stats à 3 points ? »*, la recherche vectorielle ne récupère que des chunks du débat "Reggie Miller GOAT", sans lien avec la question. La réponse générée identifie donc à tort **Reggie Miller** comme le joueur qui impressionne le plus les fans, et admet ne pas avoir les stats à 3 points en playoffs. `context_precision = 0.0` et `context_recall = 0.0` : ajouter le SQL Tool n'aide pas si la recherche textuelle en amont ramène le mauvais contexte — la qualité du retrieval reste un facteur limitant pour les questions mixtes.
 
-**Une hallucination du SQL Tool lui-même, T06 (vérifié)** : la question *« Combien de points au total un joueur donné a-t-il marqués cette saison régulière ? »* ne nomme aucun joueur. Au lieu de renvoyer `NO_DATA` ou de demander une précision, le générateur SQL a produit `WHERE player_name = 'LeBron James'` de sa propre initiative et l'application a répondu avec ce chiffre comme si la question l'avait demandé. C'est un vrai défaut de garde-fou (le SQL Tool devrait détecter l'ambiguïté et refuser plutôt qu'inventer un joueur), cohérent avec le score `context_recall = 0.0` de cette question. **Recommandation : ajouter une vérification explicite dans `sql_tool.py` pour rejeter/signaler les requêtes générées contenant une valeur (nom de joueur, équipe...) non présente dans la question d'origine.**
+**Une hallucination du SQL Tool lui-même, T06 (vérifié, bug toujours présent après régénération de la base)** : la question *« Combien de points au total un joueur donné a-t-il marqués cette saison régulière ? »* ne nomme aucun joueur. Le générateur SQL produit toujours `WHERE player_name = 'LeBron James'` de sa propre initiative (réponse : *« Le total de points marqués par LeBron James cette saison régulière est de 1708. »*), même après correction de la base — ce bug est donc indépendant de la duplication des données et n'est pas encore corrigé dans le code. `context_recall = 0.0` sur ce cas. **Recommandation toujours valable : ajouter une vérification explicite dans `sql_tool.py` pour rejeter/signaler les requêtes générées contenant une valeur (nom de joueur, équipe...) non présente dans la question d'origine.**
 
-**`faithfulness` reste à 0 sur les réponses chiffrées même reformulées en phrase complète, T07 (vérifié)** : malgré le correctif imposant une réponse en phrase complète (voir 3.3, point 5), la réponse *« La moyenne de rebonds par match, toutes équipes confondues, est de 3.6. »* — exacte et directement issue du résultat SQL fourni en contexte — obtient tout de même `faithfulness = 0.0`. Le correctif du prompt n'a donc pas suffi à lui seul ; la métrique `faithfulness` de RAGAS reste fragile sur les réponses purement chiffrées sourcées par SQL, à traiter comme une limite de la métrique plutôt qu'un signal fiable sur ce cas précis.
+**`faithfulness` s'améliore mais reste imparfait sur les réponses chiffrées, T07 (vérifié, run régénéré)** : la réponse *« La moyenne de rebonds par match, toutes équipes confondues, est de 3.6. »* — exacte et directement issue du résultat SQL fourni en contexte — obtenait `faithfulness = 0.0` sur le run précédent ; elle obtient `faithfulness = 0.5` sur le run régénéré (même réponse, même contexte : la variance vient du juge LLM, non déterministe malgré `temperature=0.0`). Le correctif du prompt (3.3, point 5) aide donc mais ne stabilise pas complètement la métrique sur ce type de réponse — à traiter comme une limite de mesure plutôt qu'un signal fiable sur ce cas précis.
 
-**Les refus `NO_DATA` sont corrects mais mal notés par RAGAS, T08 et T09 (correction d'une erreur du rapport précédent)** : sur ces deux cas volontairement irréalisables, le système répond correctement et clairement que la donnée n'est pas disponible (ex. T08 : *« La donnée n'est pas disponible dans la base actuelle, car les statistiques ne sont fournies qu'à l'échelle de la saison entière et non par match. »*), conformément au comportement attendu. **Contrairement à une version précédente de ce rapport, les scores `faithfulness` mesurés ne sont pas de 1,0 mais de 0,0 pour ces deux cas** : la métrique RAGAS peine à évaluer une réponse de refus, qui ne "cite" pas le contexte texte fourni (puisqu'elle explique une limite de la base plutôt que d'en extraire une information). Le comportement métier est correct ; c'est la métrique qui n'est pas adaptée à ce type de réponse — point à documenter comme limite méthodologique plutôt qu'à corriger dans le code.
+**Les refus `NO_DATA` sont corrects mais mal notés par RAGAS, T08 et T09 (confirmé sur le run régénéré)** : sur ces deux cas volontairement irréalisables, le système répond correctement et clairement que la donnée n'est pas disponible (ex. T08 : *« La donnée n'est pas disponible dans la base actuelle, car les statistiques ne sont fournies qu'à l'échelle de la saison entière et non par match. »*), conformément au comportement attendu, et ce comportement est stable entre les deux runs. `faithfulness = 0.0` et `answer_relevancy = 0.0` dans les deux cas : la métrique RAGAS peine à évaluer une réponse de refus, qui ne "cite" pas le contexte texte fourni. Le comportement métier est correct ; c'est la métrique qui n'est pas adaptée à ce type de réponse — point à documenter comme limite méthodologique plutôt qu'à corriger dans le code.
 
-**Une anomalie de données révélée par le SQL Tool, T10 (vérifié, cause racine confirmée)** : sur *« Quels sont les 3 meilleurs passeurs en moyenne par match... »*, la requête générée (`ORDER BY ast_per_game DESC LIMIT 3`) renvoie **trois fois la même ligne : Trae Young, 11,6 passes**, au lieu de 3 joueurs distincts. La réponse générée reflète fidèlement ce résultat (*« Trae Young... suivi du même Trae Young... et enfin Trae Young »*), d'où un `faithfulness = 1.0` malgré un résultat manifestement incohérent. **Cause racine confirmée (et non plus supposée)** : `load_excel_to_db.py::load_player_season_stats` n'était pas idempotent (voir section 2, encadré) — la base utilisée pour cette évaluation contenait 1707 lignes dans `player_season_stats` pour 569 joueurs réels (× 3), chaque joueur, dont Trae Young, y étant présent trois fois à l'identique. Ce n'est donc pas une limite du SQL Tool mais un bug d'ingestion, désormais corrigé (purge de la table avant réinsertion). **Recommandation : re-générer la base avec le script corrigé et rejouer T10 avant de considérer ce cas clos.**
+**Une anomalie de données révélée par le SQL Tool, T10 — corrigée et vérifiée après régénération de la base** : sur le run initial, la requête *« Quels sont les 3 meilleurs passeurs en moyenne par match... »* (`ORDER BY ast_per_game DESC LIMIT 3`) renvoyait **trois fois la même ligne : Trae Young, 11,6 passes**, au lieu de 3 joueurs distincts — `player_season_stats` contenait alors 1707 lignes pour 569 joueurs réels (× 3, bug d'ingestion non idempotente, voir section 2). Après correction de `load_excel_to_db.py` (purge avant réinsertion) et rechargement de la base (569 lignes), **le run régénéré du 17/08/2026 confirme la correction** : la même requête renvoie désormais 3 joueurs distincts — *« Trae Young avec 11,6 passes... Nikola Jokić à 10,2... Tyrese Haliburton avec 9,2 »* — avec `faithfulness = 1.0` et `context_recall = 1.0`. Cas clos.
 
 ### 4.3 Suivi des runs intermédiaires
 
@@ -135,13 +141,15 @@ L'évaluation a été exécutée plusieurs fois pendant le développement ; les 
 
 | Run | faithfulness | answer_relevancy | context_precision | context_recall |
 |---|---|---|---|---|
-| Before (intermédiaire 1) | 0,796 | 0,301 | 0,271 | 0,385 |
-| After (intermédiaire 1) | 0,725 | 0,496 | 0,409 | 0,615 |
-| After (intermédiaire 2) | 0,666 | 0,501 | 0,443 | 0,577 |
-| **Before (final, CSV conservé)** | **0,783** | **0,357** | **0,405** | **0,364** |
-| **After (final, CSV conservé)** | **0,648** | **0,626** | **0,466** | **0,542** |
+| Before (intermédiaire, n=11, T08 absent) | 0,796 | 0,301 | 0,271 | 0,385 |
+| Before (intermédiaire, n=11, T08 absent) | 0,817 | 0,327 | 0,358 | 0,385 |
+| After (intermédiaire, n=12, base dupliquée x3) | 0,725 | 0,496 | 0,409 | 0,615 |
+| After (intermédiaire, n=12, base dupliquée x3) | 0,648 | 0,626 | 0,466 | 0,542 |
+| Before (intermédiaire, n=13, 2 métriques en échec juge : answer_relevancy/T03, faithfulness/T04) | 0,850 | 0,317 | 0,366 | 0,385 |
+| **Before (final, CSV conservé, n=13/13 sur les 4 métriques)** | **0,867** | **0,295** | **0,274** | **0,346** |
+| **After (final, CSV conservé, n=13/13, base corrigée)** | **0,755** | **0,649** | **0,351** | **0,615** |
 
-Le sens des écarts (`answer_relevancy`, `context_precision` et `context_recall` toujours en hausse en mode `after`) reste stable d'un run à l'autre, ce qui donne confiance dans la conclusion générale malgré la variance sur les valeurs absolues et la taille d'échantillon réduite (11-12 questions selon le run). Un échantillon plus large et une couverture strictement identique entre `before` et `after` réduiraient cette variance et sont recommandés pour une évaluation en production.
+Le sens des écarts (`answer_relevancy` et `context_recall` toujours nettement en hausse en mode `after`) reste stable d'un run à l'autre, ce qui donne confiance dans la conclusion générale malgré la variance sur les valeurs absolues et la taille d'échantillon réduite (11-13 questions selon le run). `context_precision` est la métrique la plus sensible à la composition exacte du run (l'ajout de T10b, absent des runs précédents, fait baisser la moyenne `after` sur cette métrique précise — voir 4.1). Un échantillon plus large et une couverture strictement identique entre `before` et `after` réduiraient cette variance et sont recommandés pour une évaluation en production.
 
 ## 5. Limites
 
@@ -159,12 +167,13 @@ Le SQL Tool est conçu pour détecter ce cas et répondre `NO_DATA` plutôt que 
 - `answer_relevancy` reste sensible à la longueur/forme des réponses (pénalise les réponses courtes et factuelles par rapport à des réponses longues et discursives), un biais à interpréter avec prudence plutôt qu'un signal de qualité brut.
 - `faithfulness`, sur des réponses purement chiffrées, dépend de la formulation exacte de la réponse (phrase complète vs valeur isolée) — un point de fragilité de la métrique plus que du système évalué.
 - Aucune métrique ne mesure ici la latence ni le coût par requête, deux dimensions pourtant pertinentes pour un usage en production (à envisager pour un futur monitoring).
+- Le juge RAGAS/Mistral peut échouer à noter une métrique sur une question précise (`NaN` plutôt qu'une erreur bloquante) : observé sur le run `before` du 17/08/2026 (`answer_relevancy` sur T03, `faithfulness` sur T04). `evaluate_ragas.py` ne le signale pas explicitement dans les logs (le `.mean()` pandas les ignore silencieusement) — une vérification manuelle du nombre de valeurs non-nulles par colonne est nécessaire avant de publier des moyennes, sans quoi la taille d'échantillon réelle par métrique reste invisible.
 
 ### 5.3 Limites de l'échantillon de test
 
 13 questions est un échantillon volontairement restreint pour un prototype, suffisant pour un premier audit avant/après mais insuffisant pour une évaluation statistiquement robuste en production. Il ne couvre pas non plus la robustesse à un changement de corpus (nouveaux threads Reddit) ou de modèle de génération — deux axes de sensibilité à anticiper (voir section 6).
 
-De plus, la comparaison before/after actuellement disponible n'est **pas strictement appariée** : `T08` (complexe_chiffre, cas `NO_DATA`) est absent du run `before` conservé, et `T10b` (complexe_chiffre) est absent des deux runs. Les moyennes de la section 4.1 portent donc sur 11 questions en `before` et 12 en `after`, pas sur les 13 mêmes questions. La tendance générale (progression de `answer_relevancy`, `context_precision`, `context_recall`) reste cohérente sur les runs intermédiaires disponibles (voir 4.3), mais une comparaison rigoureuse nécessiterait de relancer `evaluate_ragas.py --mode before` et `--mode after` sur exactement les mêmes 13 cas avant toute publication de ces chiffres en production.
+**Mise à jour du 17/08/2026** : `before` et `after` couvrent désormais tous les deux les 13 cas de test, sur les 4 métriques, sans valeur manquante (voir 4.1). Deux corrections y ont contribué : le retry réseau ajouté en 3.3 (point 7), qui a permis au run `before` d'aller au bout sans être interrompu par une erreur transitoire ; et un retry automatique ajouté dans `evaluate_ragas.py` qui relance le juge RAGAS uniquement sur les questions en échec de notation (`NaN`) plutôt que de laisser ces cellules vides. Un premier run `before` avait encore 2 cellules en `NaN` malgré le premier correctif (aléa ponctuel du juge, voir 5.2) ; un second run, avec le retry automatique en place, les a résolues. La comparaison de la section 4.1 est donc désormais strictement appariée, au niveau des questions et des métriques.
 
 ## 6. Choix techniques et sensibilité du système (éléments de discussion)
 
@@ -180,20 +189,26 @@ De plus, la comparaison before/after actuellement disponible n'est **pas stricte
 
 ## 7. Conclusion et recommandations
 
-L'ajout du SQL Tool améliore mesurablement le système sur 3 des 4 métriques RAGAS (answer_relevancy +0,269, context_precision +0,061, context_recall +0,178), confirmant l'intérêt de l'enrichissement chiffré pour répondre aux besoins métier de Sarah. La baisse de `faithfulness` (-0,135) a été investiguée cas par cas (section 4.2) : elle recouvre à la fois une limite de la métrique RAGAS sur les réponses de refus (`NO_DATA`, T08/T09) et sur les réponses chiffrées courtes (T07), un vrai défaut applicatif (le SQL Tool peut halluciner une valeur non demandée, T06), et un bug d'ingestion des données (table `player_season_stats` triplée faute de purge avant réinsertion, à l'origine de l'anomalie T10 — voir section 2). Ce dernier bug étant corrigé après la campagne mesurée ici, **les chiffres de la section 4.1 restent valables comme diagnostic mais devront être rejoués sur une base assainie avant publication finale**.
+L'ajout du SQL Tool améliore mesurablement le système sur la comparaison finale, strictement appariée à 13 cas et sans valeur manquante des deux côtés (answer_relevancy +0,353, context_recall +0,269, context_precision +0,077), confirmant l'intérêt de l'enrichissement chiffré pour répondre aux besoins métier de Sarah. `faithfulness` recule (-0,112, écart réel et mesuré sur échantillon complet). Cet écart a été investigué cas par cas (section 4.2) et attribué à : une limite de la métrique RAGAS sur les réponses de refus (`NO_DATA`, T08/T09) et sur les réponses chiffrées courtes (T07, partiellement amélioré mais instable d'un run à l'autre) ; un vrai défaut applicatif encore ouvert (le SQL Tool peut halluciner une valeur non demandée, T06) ; et un bug d'ingestion des données désormais corrigé et vérifié (table `player_season_stats` triplée, à l'origine de l'anomalie T10, confirmée résolue).
+
+**État des corrections apportées pendant cette mission** :
+- ✅ Base `player_season_stats` dédupliquée (`load_excel_to_db.py` rendu idempotent) — T10 confirmé corrigé.
+- ✅ Routage Pydantic AI réparé (`result_type`→`output_type`) — le routeur LLM s'exécute désormais réellement au lieu de toujours retomber sur l'heuristique.
+- ✅ Retry réseau ajouté sur les appels Mistral — le script ne perd plus tout un run pour une erreur transitoire (503/429).
+- ✅ Retry automatique du juge RAGAS sur les questions en échec de notation (`NaN`), ajouté dans `evaluate_ragas.py`.
+- ✅ `evaluate_ragas.py` rejoué en modes `before` et `after` : comparaison finale strictement appariée sur les 13 cas et les 4 métriques, sans valeur manquante.
 
 **Recommandations pour la suite** :
-1. Relancer `python load_excel_to_db.py` (script désormais idempotent) pour repartir sur une base `player_season_stats` propre (569 lignes, plus 1707), puis rejouer `evaluate_ragas.py --mode after` pour confirmer que T10 se corrige.
-2. Corriger `utils/sql_tool.py` pour rejeter/signaler une requête générée contenant une valeur (nom de joueur, équipe...) absente de la question d'origine (voir T06).
-3. Reformuler le cas de test T06 avec un nom de joueur explicite, et aligner strictement la couverture `before`/`after` (actuellement 11 vs 12 cas sur 13, voir 5.3) avant toute nouvelle campagne de mesure.
-4. Élargir le jeu de test au-delà de 13 questions pour fiabiliser les scores absolus.
-5. Obtenir de Sarah un fichier à granularité match par match si les cas d'usage "5 derniers matchs" / "domicile-extérieur" restent prioritaires.
-6. Configurer `LOGFIRE_TOKEN` en environnement de production pour un suivi continu des performances.
-7. Reproduire cette évaluation à chaque changement significatif de corpus ou de modèle de génération.
+1. Corriger `utils/sql_tool.py` pour rejeter/signaler une requête générée contenant une valeur (nom de joueur, équipe...) absente de la question d'origine (voir T06, seul bug applicatif encore ouvert).
+2. Reformuler le cas de test T06 avec un nom de joueur explicite.
+3. Élargir le jeu de test au-delà de 13 questions pour fiabiliser les scores absolus.
+4. Obtenir de Sarah un fichier à granularité match par match si les cas d'usage "5 derniers matchs" / "domicile-extérieur" restent prioritaires.
+5. Configurer `LOGFIRE_TOKEN` en environnement de production pour un suivi continu des performances.
+6. Reproduire cette évaluation à chaque changement significatif de corpus ou de modèle de génération.
 
 ## Annexe — Jeu de questions de test complet
 
-Les 13 cas ci-dessous sont définis dans `tests/test_questions.py`. Seuls `T08` (absent du run `before` conservé) et `T10b` (absent des deux runs conservés) n'apparaissent pas dans les résultats chiffrés de la section 4 — voir 5.3.
+Les 13 cas ci-dessous sont définis dans `tests/test_questions.py`. Les runs finaux conservés (section 4.1) couvrent les 13 cas des deux côtés (`before` et `after`), sur les 4 métriques RAGAS, sans valeur manquante.
 
 | ID | Catégorie | Question |
 |---|---|---|

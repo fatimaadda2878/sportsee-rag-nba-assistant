@@ -64,9 +64,16 @@ _router_agent: Optional[Agent] = None
 def _get_router_agent() -> Agent:
     global _router_agent
     if _router_agent is None:
+        # NB (corrigé le 17/08/2026) : pydantic-ai a renommé le paramètre de
+        # sortie structurée `result_type` -> `output_type` (le champ `.data`
+        # du résultat est devenu `.output`, voir route_query ci-dessous).
+        # L'ancien nom ne levait pas d'erreur bloquante mais provoquait un
+        # échec systématique de l'agent, silencieusement rattrapé par le
+        # fallback heuristique : le routage LLM ne se déclenchait donc
+        # jamais en pratique tant que ce n'était pas corrigé.
         _router_agent = Agent(
             f"mistral:{MODEL_NAME}",
-            result_type=QueryRoute,
+            output_type=QueryRoute,
             system_prompt=(
                 "Tu classes les questions d'un chatbot d'analyse NBA. "
                 "needs_sql=True si répondre nécessite des chiffres/statistiques "
@@ -99,7 +106,7 @@ def route_query(question: str) -> QueryRoute:
 
             agent = _get_router_agent()
             result = agent.run_sync(question)
-            route = result.data
+            route = result.output
             logfire.info(
                 "query_routed", question=question, needs_sql=route.needs_sql,
                 needs_text_context=route.needs_text_context,

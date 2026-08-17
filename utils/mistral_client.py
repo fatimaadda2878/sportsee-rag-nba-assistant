@@ -17,6 +17,7 @@ Si l'API du SDK a encore changé entre-temps, c'est ici qu'il faut corriger.
 from __future__ import annotations
 
 import logging
+import time
 from typing import Optional
 
 from mistralai import Mistral
@@ -33,6 +34,41 @@ class MistralClientError(Exception):
 
 _client: Optional[Mistral] = None
 
+# Erreurs transitoires côté infra Mistral (indisponibilité momentanée,
+# surcharge) : ça vaut le coup de réessayer plutôt que de faire planter tout
+# le script (ex: `evaluate_ragas.py` sur 13 questions perdrait tout son
+# travail pour un seul 503 isolé). 429 (rate limit) inclus aussi : un léger
+# backoff suffit généralement à repasser sous la limite.
+_RETRYABLE_STATUS_MARKERS = ("503", "502", "504", "429", "connection", "timeout")
+_MAX_RETRIES = 3
+_BACKOFF_BASE_SECONDS = 2
+
+
+def _is_retryable(error: Exception) -> bool:
+    msg = str(error).lower()
+    return any(marker in msg for marker in _RETRYABLE_STATUS_MARKERS)
+
+
+def _call_with_retry(fn, description: str):
+    last_error: Optional[Exception] = None
+    for attempt in range(1, _MAX_RETRIES + 1):
+        try:
+            return fn()
+        except Exception as e:
+            last_error = e
+            if attempt < _MAX_RETRIES and _is_retryable(e):
+                wait = _BACKOFF_BASE_SECONDS * attempt
+                logger.warning(
+                    f"{description}: erreur transitoire (tentative {attempt}/{_MAX_RETRIES}), "
+                    f"nouvel essai dans {wait}s: {e}"
+                )
+                time.sleep(wait)
+                continue
+            logger.error(f"{description}: échec définitif après {attempt} tentative(s): {e}")
+            raise MistralClientError(str(e)) from e
+    # Ne devrait jamais être atteint (la boucle raise ou return systématiquement)
+    raise MistralClientError(str(last_error))
+
 
 def get_client() -> Mistral:
     """Retourne un client Mistral singleton (réutilisé entre les appels)."""
@@ -46,32 +82,27 @@ def get_client() -> Mistral:
 
 def chat_complete(model: str, messages: list[dict], temperature: float = 0.1) -> str:
     """
-    Appelle le chat completion Mistral.
+    Appelle le chat completion Mistral (avec retry sur erreurs transitoires).
     `messages` : liste de dicts {"role": "user"/"system"/"assistant", "content": "..."}
     Retourne le texte de la réponse (première completion).
     """
     client = get_client()
-    try:
-        response = client.chat.complete(
-            model=model,
-            messages=messages,
-            temperature=temperature,
-        )
-    except Exception as e:
-        logger.error(f"Erreur lors de l'appel chat.complete Mistral: {e}")
-        raise MistralClientError(str(e)) from e
 
-    if not response.choices:
-        raise MistralClientError("Aucune réponse (choices vide) retournée par l'API Mistral.")
-    return response.choices[0].message.content
+    def _do_call():
+        response = client.chat.complete(model=model, messages=messages, temperature=temperature)
+        if not response.choices:
+            raise MistralClientError("Aucune réponse (choices vide) retournée par l'API Mistral.")
+        return response.choices[0].message.content
+
+    return _call_with_retry(_do_call, "chat.complete Mistral")
 
 
 def embed_texts(model: str, texts: list[str]) -> list[list[float]]:
-    """Génère les embeddings pour une liste de textes. Retourne une liste de vecteurs."""
+    """Génère les embeddings pour une liste de textes (avec retry). Retourne une liste de vecteurs."""
     client = get_client()
-    try:
+
+    def _do_call():
         response = client.embeddings.create(model=model, inputs=texts)
-    except Exception as e:
-        logger.error(f"Erreur lors de l'appel embeddings.create Mistral: {e}")
-        raise MistralClientError(str(e)) from e
-    return [d.embedding for d in response.data]
+        return [d.embedding for d in response.data]
+
+    return _call_with_retry(_do_call, "embeddings.create Mistral")

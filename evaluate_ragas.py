@@ -195,27 +195,83 @@ def run_evaluation(mode: str, output_path: str) -> pd.DataFrame:
         # d'où les TimeoutError résiduels. On relève le timeout et on
         # raccourcit le backoff max pour enchaîner les retries plus vite.
         run_config = RunConfig(max_workers=2, max_retries=20, max_wait=45, timeout=300)
+        metric_cols = ["faithfulness", "answer_relevancy", "context_precision", "context_recall"]
+        metrics = [faithfulness, answer_relevancy, context_precision, context_recall]
 
         results = evaluate(
-            dataset,
-            metrics=[faithfulness, answer_relevancy, context_precision, context_recall],
-            llm=judge_llm,
-            embeddings=judge_embeddings,
-            run_config=run_config,
+            dataset, metrics=metrics, llm=judge_llm, embeddings=judge_embeddings, run_config=run_config,
         )
         df = results.to_pandas()
-
-        # On réinjecte l'id/catégorie métier pour faciliter le tableau comparatif
         df["id"] = dataset["id"]
         df["category"] = dataset["category"]
+
+        # ⚠️ Le juge RAGAS/Mistral peut échouer à noter une métrique sur une
+        # question précise (NaN, sans lever d'exception) même après les
+        # retries internes de `RunConfig`. Un `.mean()` sur un DataFrame avec
+        # des NaN les ignore silencieusement (taille d'échantillon réduite
+        # sans avertissement), ce qui rendait les runs before/after non
+        # comparables métrique par métrique (voir Rapport_Evaluation_RAG.md,
+        # section 5.2). On ré-exécute `evaluate()` uniquement sur les
+        # questions concernées, jusqu'à `_MAX_NAN_RETRY_PASSES` passes, pour
+        # tenter de compléter les cellules manquantes avant de figer le CSV.
+        _MAX_NAN_RETRY_PASSES = 3
+        for attempt in range(1, _MAX_NAN_RETRY_PASSES + 1):
+            nan_mask = df[metric_cols].isna().any(axis=1)
+            if not nan_mask.any():
+                break
+            failing_ids = df.loc[nan_mask, "id"].tolist()
+            logger.warning(
+                f"[{mode}] {len(failing_ids)} question(s) avec au moins une métrique non notée "
+                f"(NaN) après passe {attempt}: {failing_ids}. Nouvelle tentative sur ces questions "
+                f"uniquement ({attempt}/{_MAX_NAN_RETRY_PASSES})."
+            )
+            retry_dataset = dataset.filter(lambda row: row["id"] in failing_ids)
+            retry_results = evaluate(
+                retry_dataset, metrics=metrics, llm=judge_llm, embeddings=judge_embeddings,
+                run_config=run_config,
+            )
+            retry_df = retry_results.to_pandas()
+            retry_df["id"] = retry_dataset["id"]
+            # Fusion cellule par cellule (id + colonne métrique), pas ligne
+            # entière : on ne veut écraser que ce qui était NaN, pas repasser
+            # sur des scores déjà obtenus avec succès à la passe précédente.
+            retry_by_id = retry_df.set_index("id")
+            for idx in df.index[nan_mask]:
+                row_id = df.at[idx, "id"]
+                if row_id not in retry_by_id.index:
+                    continue
+                for col in metric_cols:
+                    if pd.isna(df.at[idx, col]) and not pd.isna(retry_by_id.at[row_id, col]):
+                        df.at[idx, col] = retry_by_id.at[row_id, col]
+
+        remaining_nan_mask = df[metric_cols].isna().any(axis=1)
+        if remaining_nan_mask.any():
+            still_failing = df.loc[remaining_nan_mask, ["id"] + metric_cols].to_dict(orient="records")
+            logger.error(
+                f"[{mode}] {int(remaining_nan_mask.sum())} question(s) restent non notées sur au "
+                f"moins une métrique après {_MAX_NAN_RETRY_PASSES} tentatives, malgré le retry : "
+                f"{still_failing}. Ces cellules resteront vides dans le CSV — la comparaison "
+                f"before/after ne sera pas strictement appariée sur 13/13 pour ces métriques."
+            )
+            logfire.info("ragas_judge_unresolved_nan", mode=mode, failing=still_failing)
 
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
         df.to_csv(output_path, index=False)
         logger.info(f"Résultats sauvegardés dans {output_path}")
 
-        summary = df[["faithfulness", "answer_relevancy", "context_precision", "context_recall"]].mean()
-        logger.info(f"--- Scores moyens ({mode}) ---\n{summary}")
-        logfire.info("ragas_evaluation_completed", mode=mode, **summary.to_dict())
+        # Moyenne ET taille d'échantillon réelle par métrique (n non-null),
+        # affichées explicitement plutôt que de laisser un .mean() silencieux
+        # masquer d'éventuelles valeurs manquantes.
+        nb_valid = df[metric_cols].notna().sum()
+        summary = df[metric_cols].mean()
+        summary_lines = "\n".join(
+            f"{col}: mean={summary[col]:.4f} (n={int(nb_valid[col])}/{len(df)})" for col in metric_cols
+        )
+        logger.info(f"--- Scores moyens ({mode}) ---\n{summary_lines}")
+        logfire.info(
+            "ragas_evaluation_completed", mode=mode,
+            **summary.to_dict(), **{f"{c}_n": int(nb_valid[c]) for c in metric_cols},
+        )
 
         return df
 
