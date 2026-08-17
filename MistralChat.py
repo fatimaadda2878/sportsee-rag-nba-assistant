@@ -61,6 +61,9 @@ Ta mission est de répondre aux questions des fans en t'appuyant STRICTEMENT sur
 fournies ci-dessous (contexte texte et/ou résultats chiffrés). Si une donnée n'est pas présente,
 dis-le clairement plutôt que d'inventer un chiffre.
 
+Réponds TOUJOURS par au moins une phrase complète, même pour un résultat purement
+chiffré (ex: "La moyenne de rebonds par match est de 3.6." et non juste "3.6").
+
 --- CONTEXTE TEXTE (rapports, archives) ---
 {{text_context}}
 

@@ -51,6 +51,11 @@ logger = logging.getLogger("evaluate_ragas")
 
 SYSTEM_PROMPT_TEMPLATE = """Tu es 'NBA Analyst AI'. Réponds STRICTEMENT à partir du contexte fourni.
 
+Réponds TOUJOURS par au moins une phrase complète en français, même pour un
+résultat purement chiffré (ex: "La moyenne de rebonds par match est de 3.6."
+et non juste "3.6"). Une réponse réduite à un nombre ou un mot isolé n'est
+pas acceptable.
+
 --- CONTEXTE TEXTE ---
 {text_context}
 

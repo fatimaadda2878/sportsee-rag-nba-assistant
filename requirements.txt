@@ -42,11 +42,6 @@ PyPDF2==3.0.1
 python-docx==1.1.2
 tqdm==4.66.5
 requests==2.32.3
-# OCR (PyMuPDF, Pillow, easyocr -> torch/torchvision, plusieurs Go) : optionnel,
-# utilisé uniquement en fallback si un PDF scanné ne contient pas de texte
-# extractible (voir utils/data_loader.py, déjà tolérant à leur absence).
-# Installer seulement si besoin et si l'espace disque le permet :
-#   pip install -r requirements-ocr.txt
 
 # --- Évaluation RAGAS ---
 ragas==0.1.19

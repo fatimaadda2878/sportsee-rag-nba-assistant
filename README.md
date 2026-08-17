@@ -121,7 +121,6 @@ Le projet compare ainsi deux approches :
   Observabilité             Pydantic Logfire
   Tests                     Pytest
   Extraction documentaire   PyPDF2 / python-docx
-  OCR optionnel             EasyOCR
 
 ------------------------------------------------------------------------
 
@@ -156,7 +155,6 @@ sportsee-rag-nba-assistant/
 │   └── regular_NBA.xlsx        # Données NBA structurées
 │
 ├── requirements.txt
-├── requirements-ocr.txt
 ├── .env.example
 └── README.md
 ```
@@ -250,8 +248,6 @@ CHUNK_OVERLAP = 150 caractères
 SEARCH_K = 5
 EMBEDDING_MODEL = mistral-embed
 ```
-
-Un fallback OCR peut être installé séparément pour les PDF scannés.
 
 ------------------------------------------------------------------------
 
@@ -522,12 +518,6 @@ pip install -r requirements.txt
 ```
 
 Python **3.12** est recommandé.
-
-L'OCR est optionnel :
-
-``` bash
-pip install -r requirements-ocr.txt
-```
 
 ------------------------------------------------------------------------
 

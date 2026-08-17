@@ -6,97 +6,30 @@ import io
 from pathlib import Path
 from typing import List, Dict, Optional, Union
 import logging
-import numpy as np
-from tqdm import tqdm
-
-# --- Importations pour OCR ---
-try:
-    import fitz  # PyMuPDF
-    from PIL import Image
-    import easyocr
-
-    logging.info("Initialisation du lecteur EasyOCR...")
-    reader = easyocr.Reader(['en', 'fr'])
-    logging.info("Lecteur EasyOCR initialisé.")
-
-except ImportError as e:
-    logging.warning(f"Modules OCR (PyMuPDF, Pillow, easyocr) non installés ou erreur: {e}. L'OCR pour PDF ne sera pas disponible.")
-    fitz = None
-    Image = None
-    easyocr = None
-    reader = None
-except Exception as e:
-    logging.error(f"Erreur inattendue lors du chargement des modules/modèle OCR: {e}")
-    fitz = None
-    Image = None
-    easyocr = None
-    reader = None
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # --- Fonctions d'extraction de texte ---
 
-def extract_text_from_pdf_with_ocr(file_path: str) -> Optional[str]:
-    """Extrait le texte d'un fichier PDF en utilisant l'OCR (EasyOCR)."""
-    if not fitz or not reader:
-        logging.warning("Modules/Modèle OCR non disponibles. Impossible d'effectuer l'OCR.")
-        return None
-
-    text_content = []
-    try:
-        doc = fitz.open(file_path)
-        for page_num in tqdm(range(len(doc)), desc=f"OCR de {os.path.basename(file_path)}"):
-            page = doc.load_page(page_num)
-            pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))
-            img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-
-            try:
-                img_np = np.array(img)
-                results = reader.readtext(img_np)
-                page_text = "\n".join([res[1] for res in results])
-                text_content.append(page_text)
-            except Exception as ocr_e:
-                logging.error(f"Erreur lors de l'OCR de la page {page_num + 1} de {file_path} avec EasyOCR: {ocr_e}")
-                continue
-
-        doc.close()
-        full_text = "\n".join(text_content).strip()
-        if full_text:
-            logging.info(f"Texte extrait via OCR de PDF: {file_path} ({len(full_text)} caractères)")
-            return full_text
-        else:
-            logging.warning(f"Aucun texte significatif extrait via OCR de {file_path}.")
-            return None
-    except Exception as e:
-        logging.error(f"Erreur lors de l'ouverture ou du traitement OCR du PDF {file_path}: {e}")
-        return None
-
 def extract_text_from_pdf(file_path: str) -> Optional[str]:
-    """Extrait le texte d'un fichier PDF, avec fallback OCR si peu de texte est trouvé."""
+    """Extrait le texte d'un fichier PDF (extraction standard, sans OCR)."""
     try:
         from PyPDF2 import PdfReader
         reader_pdf = PdfReader(file_path)
         text = "".join(page.extract_text() + "\n" for page in reader_pdf.pages if page.extract_text())
 
         if len(text.strip()) < 100:
-            logging.info(f"Peu de texte trouvé dans {file_path} via extraction standard ({len(text.strip())} caractères). Tentative d'OCR...")
-            ocr_text = extract_text_from_pdf_with_ocr(file_path)
-            if ocr_text:
-                return ocr_text
-            else:
-                logging.warning(f"L'OCR n'a pas non plus produit de texte significatif pour {file_path}.")
-                return text
-
-        logging.info(f"Texte extrait de PDF: {file_path} ({len(text)} caractères)")
+            logging.warning(
+                f"Peu de texte trouvé dans {file_path} via extraction standard "
+                f"({len(text.strip())} caractères). Le fichier est peut-être un PDF "
+                f"scanné (image) : ce cas n'est pas géré (pas d'OCR dans ce projet)."
+            )
+        else:
+            logging.info(f"Texte extrait de PDF: {file_path} ({len(text)} caractères)")
         return text
     except Exception as e:
-        logging.error(f"Erreur extraction PDF {file_path}: {e}. Tentative d'OCR en dernier recours...")
-        ocr_text = extract_text_from_pdf_with_ocr(file_path)
-        if ocr_text:
-            return ocr_text
-        else:
-            logging.warning(f"L'OCR n'a pas non plus produit de texte significatif après échec de l'extraction standard pour {file_path}.")
-            return None
+        logging.error(f"Erreur extraction PDF {file_path}: {e}")
+        return None
 
 
 def extract_text_from_docx(file_path: str) -> Optional[str]:
