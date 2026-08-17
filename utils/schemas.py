@@ -145,11 +145,18 @@ class PlayerSeasonStatRow(BaseModel):
     def upper_team_code(cls, v: str) -> str:
         return v.strip().upper()
 
-    @field_validator("fgm")
+    @field_validator("fga")
     @classmethod
-    def fgm_leq_fga(cls, v, info):
-        fga = info.data.get("fga")
-        if fga is not None and v > fga:
+    def fga_geq_fgm(cls, v, info):
+        # NB : le validator doit être posé sur `fga` (et lire `fgm` déjà
+        # validé via info.data), pas l'inverse : en Pydantic v2, un
+        # field_validator ne voit dans info.data que les champs déjà
+        # validés, c'est-à-dire ceux déclarés AVANT lui dans la classe.
+        # `fgm` est déclaré avant `fga` ci-dessus, donc c'est bien
+        # accessible ici (l'inverse ne fonctionnerait pas : un validator
+        # sur `fgm` ne verrait jamais `fga`, qui est déclaré après).
+        fgm = info.data.get("fgm")
+        if fgm is not None and fgm > v:
             raise ValueError("fgm ne peut pas dépasser fga.")
         return v
 
