@@ -49,6 +49,22 @@ from pydantic import ValidationError
 
 from utils.config import EXCEL_SOURCE_FILE
 from utils.db import init_db, get_session_factory, Team, PlayerSeasonStat, TeamSummary
+
+# ============================================================
+# ⚠️ Bug corrigé le 17/08/2026 : `load_player_season_stats` utilisait
+# `session.add(...)` (simple insertion, sans clé métier ni upsert) pour
+# CHAQUE ligne, contrairement à `load_teams`/`load_team_summary` qui font
+# `session.merge(...)` sur une clé primaire naturelle (team_code). Comme
+# `PlayerSeasonStat.id` est un entier auto-incrémenté sans contrainte
+# d'unicité métier, relancer ce script plusieurs fois empilait les lignes
+# à l'infini au lieu de les remplacer : la base contenait 1707 lignes dans
+# `player_season_stats` pour 569 joueurs réels dans le fichier source
+# (exactement x3, confirmant 3 exécutions successives du script sans purge
+# préalable). Cette duplication expliquait notamment un classement "top 3
+# passeurs" renvoyant 3 fois le même joueur (voir Rapport_Evaluation_RAG.md,
+# section 4.2, cas T10). Corrigé ci-dessous en vidant la table avant
+# réinsertion (rechargement complet à chaque exécution).
+# ============================================================
 from utils.schemas import TeamRow, PlayerSeasonStatRow, TeamSummaryRow
 from utils.observability import logfire
 
@@ -123,6 +139,14 @@ def load_player_season_stats(excel_file: pd.ExcelFile, session) -> int:
     df = df.dropna(subset=["player_name", "team_code"])
 
     valid_rows, errors = _validate_rows(df.to_dict(orient="records"), PlayerSeasonStatRow)
+
+    # Purge avant réinsertion : pas de clé métier naturelle sur cette table
+    # (id auto-incrémenté), donc un simple `add()` dupliquerait les lignes à
+    # chaque exécution du script (voir note en tête de fichier).
+    nb_deleted = session.query(PlayerSeasonStat).delete()
+    if nb_deleted:
+        logger.info(f"player_season_stats: {nb_deleted} lignes existantes purgées avant réinsertion.")
+
     for row in valid_rows:
         session.add(PlayerSeasonStat(**row.model_dump()))
     session.commit()

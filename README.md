@@ -174,7 +174,16 @@ L'ingestion de `data/regular_NBA.xlsx` alimente notamment les tables :
 -   `team_summary`
 
 Le mapping a été validé sur le fichier fourni avec une ingestion de **30
-équipes et 569 joueurs**.
+équipes et 569 lignes joueur/passage en équipe** (fichier source, une
+exécution propre de `load_excel_to_db.py`).
+
+⚠️ **Bug corrigé le 17/08/2026** : `load_player_season_stats` n'était pas
+idempotent (`session.add()` sans purge ni clé métier), donc relancer le
+script plusieurs fois empilait les lignes. La base a ainsi contenu jusqu'à
+**1707 lignes** dans `player_season_stats` (569 × 3, confirmant 3
+exécutions successives) avant correction. Le script vide désormais la table
+avant chaque réinsertion — relancer `python load_excel_to_db.py` une fois
+pour repartir sur une base propre.
 
 ### ⚠️ Granularité des données
 
