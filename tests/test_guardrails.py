@@ -27,7 +27,9 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from utils.sql_tool import _is_safe_select, _enforce_limit, _clean_generated_sql
+from utils.sql_tool import (
+    _is_safe_select, _enforce_limit, _clean_generated_sql, _uses_only_values_from_question,
+)
 from utils.router import _heuristic_route
 from utils.schemas import SQLToolInput, PlayerSeasonStatRow
 
@@ -65,6 +67,41 @@ class TestIsSafeSelect:
             "JOIN teams t ON t.team_code = ts.team_code WHERE ts.total_points > 1000;"
         )
         assert _is_safe_select(sql) is True
+
+
+# ============================================================
+# utils.sql_tool._uses_only_values_from_question (anti-hallucination T06)
+# ============================================================
+
+class TestUsesOnlyValuesFromQuestion:
+    def test_rejects_player_name_absent_from_question(self):
+        # Reproduit le cas T06 : aucun joueur nommé dans la question, le
+        # SQL généré en invente un de sa propre initiative.
+        sql = "SELECT player_name, pts_total FROM player_season_stats WHERE player_name = 'LeBron James';"
+        question = "Combien de points au total un joueur donné a-t-il marqués cette saison régulière ?"
+        assert _uses_only_values_from_question(sql, question) is False
+
+    def test_accepts_player_name_present_in_question(self):
+        sql = "SELECT pts_total FROM player_season_stats WHERE player_name = 'LeBron James';"
+        question = "Combien de points LeBron James a-t-il marqués cette saison ?"
+        assert _uses_only_values_from_question(sql, question) is True
+
+    def test_accepts_partial_name_resolution(self):
+        # Une résolution partielle légitime (prénom seul dans la question)
+        # ne doit pas être rejetée à tort.
+        sql = "SELECT pts_total FROM player_season_stats WHERE player_name = 'LeBron James';"
+        question = "Combien de points LeBron a-t-il marqués ?"
+        assert _uses_only_values_from_question(sql, question) is True
+
+    def test_accepts_query_without_string_literals(self):
+        sql = "SELECT player_name, ast FROM player_season_stats WHERE games_played >= 10 ORDER BY ast DESC LIMIT 3;"
+        question = "Quels sont les 3 meilleurs passeurs de la saison ?"
+        assert _uses_only_values_from_question(sql, question) is True
+
+    def test_accepts_team_code_present_in_question(self):
+        sql = "SELECT * FROM teams WHERE team_code = 'LAL';"
+        question = "Quels joueurs font partie de l'équipe LAL ?"
+        assert _uses_only_values_from_question(sql, question) is True
 
 
 # ============================================================

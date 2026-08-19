@@ -178,6 +178,32 @@ def _enforce_limit(sql: str, max_rows: int = SQL_TOOL_MAX_ROWS) -> str:
     return sql.rstrip(";") + f" LIMIT {max_rows};"
 
 
+_STRING_LITERAL_PATTERN = re.compile(r"'([^']*)'")
+
+
+def _uses_only_values_from_question(sql: str, question: str) -> bool:
+    """Garde-fou anti-hallucination de valeur (corrigé le 17/08/2026).
+
+    Cas détecté lors de l'évaluation RAGAS (cas de test T06) : pour la
+    question "Combien de points au total un joueur donné a-t-il marqués
+    cette saison régulière ?" (aucun joueur nommé), le générateur SQL
+    produisait de sa propre initiative `WHERE player_name = 'LeBron James'`
+    au lieu de répondre NO_DATA ou de signaler l'ambiguïté.
+
+    Ici, on rejette toute requête dont un littéral texte (nom de joueur,
+    équipe...) n'a aucun mot en commun avec la question d'origine. On
+    vérifie mot par mot (pas le littéral entier) pour ne pas rejeter à
+    tort une résolution partielle légitime (ex: question mentionnant
+    "Lebron" -> SQL généré avec 'LeBron James').
+    """
+    question_lower = question.lower()
+    for literal in _STRING_LITERAL_PATTERN.findall(sql):
+        words = [w for w in re.findall(r"[a-zA-ZÀ-ÿ]+", literal.strip()) if len(w) > 2]
+        if words and not any(w.lower() in question_lower for w in words):
+            return False
+    return True
+
+
 def generate_sql(question: str) -> str:
     """Appelle le LLM pour générer la requête SQL correspondant à la question."""
     prompt = SQL_GENERATION_PROMPT.format(
@@ -226,6 +252,17 @@ def run_sql_tool(question: str) -> SQLToolOutput:
             return SQLToolOutput(
                 generated_sql=generated_sql, row_count=0,
                 error="Requête générée rejetée par les garde-fous de sécurité (SELECT uniquement)."
+            )
+
+        if not _uses_only_values_from_question(generated_sql, validated_input.question):
+            logger.warning(f"Requête générée rejetée (valeur absente de la question): {generated_sql}")
+            logfire.info("sql_generation_value_not_in_question", sql=generated_sql, question=question)
+            return SQLToolOutput(
+                generated_sql=generated_sql, row_count=0,
+                error=(
+                    "Requête générée rejetée : elle référence une valeur (ex. nom de joueur/équipe) "
+                    "absente de la question posée. Merci de préciser la question."
+                ),
             )
 
         safe_sql = _enforce_limit(generated_sql)

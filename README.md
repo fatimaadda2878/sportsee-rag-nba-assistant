@@ -361,6 +361,16 @@ perdre tout le run. Ajout d'un retry avec backoff dans
 questions notées `NaN` (échec de notation silencieux) dans
 `evaluate_ragas.py`.
 
+**6. Le SQL Tool pouvait halluciner une valeur non demandée**
+
+Détecté via l'évaluation RAGAS (cas de test `T06`) : pour une question ne
+nommant aucun joueur, le générateur SQL inventait de lui-même un nom
+(`WHERE player_name = 'LeBron James'`) au lieu de répondre `NO_DATA` ou
+de signaler l'ambiguïté. Corrigé avec un nouveau garde-fou
+(`utils/sql_tool.py::_uses_only_values_from_question`) qui rejette toute
+requête générée référençant une valeur absente de la question d'origine,
+testé unitairement.
+
 ------------------------------------------------------------------------
 
 # 🧪 Évaluation RAGAS
@@ -449,10 +459,10 @@ La **Faithfulness** diminue en revanche (0,867 → 0,755). Cette baisse a
 été analysée cas par cas (voir `Rapport_Evaluation_RAG.md`, section 4.2)
 et s'explique par une combinaison de facteurs : une limite du juge RAGAS
 sur les réponses de refus (`NO_DATA`, cas `T08`/`T09`) et sur certaines
-réponses chiffrées courtes (`T07`), ainsi qu'un vrai défaut applicatif
-encore ouvert sur `T06` (le SQL Tool peut inventer un joueur non précisé
-dans la question plutôt que de refuser — voir la piste d'amélioration
-correspondante ci-dessous).
+réponses chiffrées courtes (`T07`), ainsi qu'un défaut applicatif détecté
+puis corrigé sur `T06` (le SQL Tool pouvait inventer un joueur non
+précisé dans la question au lieu de refuser — voir "Bugs identifiés
+grâce à l'observabilité", point 6).
 
 ------------------------------------------------------------------------
 
