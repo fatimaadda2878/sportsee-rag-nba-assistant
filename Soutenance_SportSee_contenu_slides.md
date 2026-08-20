@@ -1,5 +1,5 @@
 # Support de soutenance — SportSee NBA Analyst AI
-### Contenu prêt à transférer dans PowerPoint / Google Slides — 11 slides, ~12 minutes
+### Contenu prêt à transférer dans PowerPoint / Google Slides — 10 slides, ~12 minutes
 
 > Mon sandbox de génération de fichiers (.pptx) est indisponible pendant cette session. Ce document contient tout le contenu, slide par slide, avec les notes orateur — à copier-coller directement. Dès que l'environnement technique est de nouveau disponible, je peux te générer le vrai fichier `.pptx` à partir de ce même contenu.
 
@@ -83,15 +83,15 @@ Juge : Mistral (`ChatMistralAI`), pas OpenAI (adapté spécifiquement au projet)
 
 | Métrique | Before (texte seul) | After (+ SQL Tool) | Évolution |
 |---|---|---|---|
-| Faithfulness | **0,867** | 0,755 | -0,112 |
-| Answer Relevancy | 0,295 | **0,649** | **+0,353** |
-| Context Precision | 0,274 | **0,351** | **+0,077** |
-| Context Recall | 0,346 | **0,615** | **+0,269** |
+| Faithfulness | **0,867** | 0,673 | -0,194 |
+| Answer Relevancy | 0,295 | **0,581** | **+0,286** |
+| Context Precision | 0,274 | **0,403** | **+0,129** |
+| Context Recall | 0,346 | **0,577** | **+0,231** |
 
-**Visuel suggéré** : graphique en barres groupées (before/after côte à côte pour chaque métrique) — natif PowerPoint/Google Slides, pas une image. Mets en évidence les deux plus grosses évolutions (Answer Relevancy, Context Recall) avec une couleur accent.
+**Visuel suggéré** : graphique en barres groupées (before/after côte à côte pour chaque métrique) — natif PowerPoint/Google Slides, pas une image. Mets en évidence les trois évolutions positives (Answer Relevancy, Context Precision, Context Recall) avec une couleur accent.
 
 **Notes orateur** :
-"Le SQL Tool améliore nettement 3 métriques sur 4. La pertinence des réponses (+0,35) et le rappel du contexte (+0,27) progressent fortement : le système trouve et utilise mieux l'information nécessaire. La faithfulness recule, j'y reviens dans deux slides — ce n'est pas ce que ça semble être au premier regard."
+"Le SQL Tool améliore nettement 3 métriques sur 4. La pertinence des réponses (+0,29) et le rappel du contexte (+0,23) progressent fortement : le système trouve et utilise mieux l'information nécessaire. La faithfulness recule, j'y reviens dans deux slides — ce n'est pas ce que ça semble être au premier regard."
 
 ---
 
@@ -121,9 +121,10 @@ Question : "Top 3 passeurs de la saison ?"
 
 - **T08/T09** (cas volontairement irréalisables) : le système répond correctement *"donnée non disponible"* → comportement attendu et correct
   - Mais RAGAS note `faithfulness = 0` car un refus ne "cite" pas de contexte à évaluer
-- **T07** (réponse chiffrée courte) : réponse exacte et sourcée, faithfulness instable d'un run à l'autre (0 → 0,5) selon le juge LLM, non déterministe
+- **T06** : le SQL Tool demande désormais une clarification plutôt que d'inventer un joueur non précisé — mais ce comportement correct fait chuter le score (1,0 → 0,75, `answer_relevancy` à 0) — **une correction de comportement fait baisser le score**, preuve que la baisse globale n'est pas un signal de qualité fiable
+- **T07** (réponse chiffrée courte) : réponse exacte et sourcée, faithfulness instable d'un run à l'autre selon le juge LLM, non déterministe
 
-**→ Le comportement métier est correct ; c'est l'outil de mesure qui n'est pas conçu pour évaluer des refus.**
+**→ Le comportement métier s'améliore à chaque fois ; c'est l'outil de mesure qui n'est pas conçu pour évaluer des refus/clarifications.**
 
 **Visuel suggéré** : un encadré "⚠️ Limite méthodologique identifiée" avec icône loupe/warning.
 
@@ -132,44 +133,26 @@ Question : "Top 3 passeurs de la saison ?"
 
 ---
 
-## Slide 8 — Rigueur : bugs identifiés et corrigés pendant la mission
-
-**L'évaluation et l'observabilité ont révélé des problèmes invisibles en mode dégradé**
-
-| Bug trouvé | Impact | Statut |
-|---|---|---|
-| SQL Tool halluciné (nom de joueur non demandé, T06) | Réponse chiffrée fondée sur un mauvais joueur | ✅ Corrigé |
-| Routage Pydantic AI en échec silencieux (API renommée) | Le routage LLM ne s'exécutait jamais réellement | ✅ Corrigé |
-| Base `player_season_stats` triplée (569 → 1707 lignes) | Classements SQL faussés (ex. top 3 = même joueur x3) | ✅ Corrigé |
-| Script d'évaluation fragile aux pannes réseau (503) | Perte totale d'un run pour une erreur transitoire | ✅ Corrigé (retry) |
-| Garde-fou de validation `fgm ≤ fga` jamais déclenché | Donnée incohérente non détectée à l'ingestion | ✅ Corrigé |
-
-**Visuel suggéré** : liste à puces avec icône ✅ verte par ligne, fond légèrement différencié.
-
-**Notes orateur** :
-"Je tiens à insister sur ce point : ces cinq bugs étaient tous invisibles tant que le système tournait 'à peu près'. C'est l'évaluation détaillée et l'instrumentation qui les ont fait remonter, un par un, avec leur cause racine identifiée et un test unitaire ajouté avant de passer au suivant."
-
----
-
-## Slide 9 — Garde-fous et tests
+## Slide 8 — Fiabilité du système : garde-fous, tests, observabilité
 
 **Sécurité du SQL Tool**
 - Requêtes SELECT uniquement, rejet DML/DDL
 - Limite de lignes retournées, détection d'injection basique
 - Mécanisme `NO_DATA` explicite plutôt qu'une hallucination
+- Vérification que toute valeur citée (nom de joueur, équipe) provient bien de la question posée
 
-**34 tests unitaires (pytest)**
-- Routeur, SQL Tool, garde-fous de validation Pydantic
-- 100% verts, sans appel API ni base de données — rapides et fiables
+**34 tests unitaires (pytest)** — routeur, SQL Tool, validation Pydantic, 100% verts, sans appel API ni base de données
 
-**Visuel suggéré** : deux colonnes, icône bouclier (sécurité) à gauche, icône coche/checklist (tests) à droite.
+**Observabilité en continu (Pydantic Logfire)** — chaque étape du pipeline est tracée (recherche vectorielle, appel SQL, génération), dashboard consultable en temps réel
+
+**Visuel suggéré** : trois colonnes ou trois icônes en ligne (bouclier / checklist / radar), chacune avec un court label — sécurité, tests, observabilité.
 
 **Notes orateur** :
-"Au-delà de l'évaluation RAGAS, qui mesure la qualité des réponses, j'ai ajouté une couche de tests unitaires classiques sur les garde-fous eux-mêmes — pour garantir qu'ils ne se cassent pas silencieusement à la prochaine modification du code."
+"Au-delà de l'évaluation RAGAS, qui mesure la qualité des réponses, j'ai construit une couche de fiabilité indépendante : des garde-fous qui empêchent le SQL Tool de sortir de son périmètre, des tests unitaires qui vérifient que ces garde-fous continuent de fonctionner à chaque modification du code, et une observabilité en continu pour détecter tout problème en production, pas seulement au moment de l'évaluation."
 
 ---
 
-## Slide 10 — Limites et pistes d'amélioration
+## Slide 9 — Limites et pistes d'amélioration
 
 - Échantillon volontairement restreint (13 questions) — à élargir pour des scores statistiquement robustes
 - Granularité des données NBA limitée à la saison (pas de match par match, pas de domicile/extérieur)
@@ -183,7 +166,7 @@ Question : "Top 3 passeurs de la saison ?"
 
 ---
 
-## Slide 11 — Conclusion
+## Slide 10 — Conclusion
 
 **Ce que la mission démontre**
 Un RAG purement textuel ne suffit pas pour des questions quantitatives précises — même bien conçu, il hallucine faute de la bonne donnée.

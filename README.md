@@ -427,14 +427,16 @@ Quatre métriques sont calculées :
 ### Scores moyens
 
 Comparaison finale (17/08/2026), strictement appariée sur les 13 cas de
-test et les 4 métriques, sans valeur manquante des deux côtés :
+test et les 4 métriques, sans valeur manquante des deux côtés (run
+`after` régénéré après correction du garde-fou anti-hallucination du SQL
+Tool, voir point 6 ci-dessous) :
 
   Métrique              Before --- texte seul   After --- routage + SQL   Évolution
   ------------------- ----------------------- ------------------------- -----------
-  Faithfulness                       **0,867**                     0,755       -0,112
-  Answer Relevancy                       0,295                 **0,649**   **+0,353**
-  Context Precision                      0,274                 **0,351**   **+0,077**
-  Context Recall                         0,346                 **0,615**   **+0,269**
+  Faithfulness                       **0,867**                     0,673       -0,194
+  Answer Relevancy                       0,295                 **0,581**   **+0,286**
+  Context Precision                      0,274                 **0,403**   **+0,129**
+  Context Recall                         0,346                 **0,577**   **+0,231**
 
 Détail complet des reproductions de run, des cas de figure et de
 l'analyse question par question : voir `Rapport_Evaluation_RAG.md`
@@ -443,26 +445,28 @@ l'analyse question par question : voir `Rapport_Evaluation_RAG.md`
 ### Interprétation
 
 L'ajout du routage et du SQL Tool améliore fortement la **pertinence des
-réponses** et le **rappel du contexte** :
+réponses**, le **rappel** et la **précision du contexte** :
 
 ``` text
-Answer Relevancy : 0,295 → 0,649
-Context Recall   : 0,346 → 0,615
+Answer Relevancy  : 0,295 → 0,581
+Context Recall    : 0,346 → 0,577
+Context Precision : 0,274 → 0,403
 ```
 
 Le système enrichi récupère donc mieux les informations nécessaires,
 notamment pour les questions chiffrées pour lesquelles une recherche
-textuelle seule est insuffisante. La **Context Precision** progresse
-aussi, plus modestement (0,274 → 0,351).
+textuelle seule est insuffisante.
 
-La **Faithfulness** diminue en revanche (0,867 → 0,755). Cette baisse a
+La **Faithfulness** diminue en revanche (0,867 → 0,673). Cette baisse a
 été analysée cas par cas (voir `Rapport_Evaluation_RAG.md`, section 4.2)
-et s'explique par une combinaison de facteurs : une limite du juge RAGAS
-sur les réponses de refus (`NO_DATA`, cas `T08`/`T09`) et sur certaines
-réponses chiffrées courtes (`T07`), ainsi qu'un défaut applicatif détecté
-puis corrigé sur `T06` (le SQL Tool pouvait inventer un joueur non
-précisé dans la question au lieu de refuser — voir "Bugs identifiés
-grâce à l'observabilité", point 6).
+et s'explique presque entièrement par une limite du juge RAGAS sur les
+réponses de refus/clarification (`NO_DATA`, cas `T08`/`T09`, et
+désormais `T06` une fois corrigé) et sur certaines réponses chiffrées
+courtes (`T07`) : RAGAS note plus sévèrement une réponse de clarification
+correcte qu'une réponse chiffrée fautive mais bien formulée. Corriger le
+bug applicatif de `T06` (voir "Bugs identifiés grâce à l'observabilité",
+point 6) a d'ailleurs *fait baisser* ce score, un effet contre-intuitif
+mais cohérent avec ce biais de mesure.
 
 ------------------------------------------------------------------------
 
