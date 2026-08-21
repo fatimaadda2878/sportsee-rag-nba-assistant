@@ -71,6 +71,9 @@ chiffré (ex: "La moyenne de rebonds par match est de 3.6." et non juste "3.6").
 --- RÉSULTATS CHIFFRÉS (base de données SQL) ---
 {{sql_context}}
 
+--- GRAPHIQUE ---
+{{plot_context}}
+
 QUESTION DU FAN:
 {{question}}
 
@@ -125,6 +128,29 @@ def format_sql_context(sql_output) -> str:
     if sql_output.truncated:
         lines.append("(résultats tronqués — affinez la question pour plus de précision)")
     return "\n".join(lines)
+
+
+def format_plot_context(plot_output) -> str:
+    """
+    Transforme un PlotToolOutput en texte pour le prompt LLM (ajouté le
+    21/08/2026, suite à un test manuel révélant un problème : sans cette
+    information, le LLM ne sait pas qu'un graphique sera affiché sous sa
+    réponse par Streamlit, et répond à tort "je ne peux pas générer de
+    graphique" alors qu'il apparaît juste en dessous.
+    """
+    if plot_output is None:
+        return "Aucun graphique n'a été demandé pour cette question."
+    if plot_output.error:
+        return (
+            f"Le graphique n'a pas pu être généré ({plot_output.error}). "
+            f"Ne prétends pas qu'un graphique est affiché ; explique la limitation si pertinent."
+        )
+    return (
+        f"Un graphique ({plot_output.chart_type}) intitulé « {plot_output.title} » a déjà été généré "
+        f"à partir des résultats SQL ci-dessus et sera affiché automatiquement juste en dessous de ta "
+        f"réponse. Ne dis PAS que tu ne peux pas générer de graphique : tu peux y faire référence "
+        f"(ex. « voir le graphique ci-dessous »)."
+    )
 
 
 # --- Interface Utilisateur Streamlit ---
@@ -191,8 +217,9 @@ if prompt := st.chat_input(f"Posez votre question sur la {NAME}..."):
                 st.info(f"Une erreur est survenue lors de la génération du graphique : {e}")
 
         # === 4. Construction du prompt final et génération de la réponse ===
+        plot_context = format_plot_context(plot_output)
         final_prompt_for_llm = SYSTEM_PROMPT.format(
-            text_context=text_context, sql_context=sql_context, question=prompt
+            text_context=text_context, sql_context=sql_context, plot_context=plot_context, question=prompt
         )
         messages_for_api = [{"role": "user", "content": final_prompt_for_llm}]
 
