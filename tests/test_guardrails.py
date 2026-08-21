@@ -33,7 +33,7 @@ from pydantic import ValidationError
 from utils.sql_tool import (
     _is_safe_select, _enforce_limit, _clean_generated_sql, _uses_only_values_from_question,
 )
-from utils.router import _heuristic_route
+from utils.router import _heuristic_route, QueryRoute
 from utils.schemas import SQLToolInput, PlayerSeasonStatRow, SQLToolOutput
 from utils.plot_tool import _choose_chart_type, _extract_labels_and_values, run_plot_tool
 from utils.data_loader import extract_text_with_ocr_nanonets
@@ -267,6 +267,28 @@ class TestHeuristicRouteNeedsPlot:
     def test_pure_qualitative_question_does_not_trigger_plot(self):
         route = _heuristic_route("Que pensent les fans du jeu des Timberwolves en playoffs ?")
         assert route.needs_plot is False
+
+
+# ============================================================
+# utils.router.QueryRoute : invariant needs_plot => needs_sql
+#
+# Bug réel observé en test manuel (21/08/2026) : le routeur LLM peut décider
+# needs_plot=True avec needs_sql=False. Sans ce garde-fou, MistralChat.py ne
+# lance pas le SQL Tool, le texte de réponse dit "donnée non disponible" (et
+# peut même halluciner un exemple), alors que le PlotTool (qui ré-exécute le
+# SQL Tool de son côté) affiche, lui, un vrai graphique : réponse
+# contradictoire. Ce test garantit l'invariant au niveau du modèle Pydantic,
+# quelle que soit la source de la décision (LLM ou heuristique).
+# ============================================================
+
+class TestQueryRoutePlotRequiresSql:
+    def test_forces_needs_sql_true_when_llm_returns_inconsistent_route(self):
+        route = QueryRoute(needs_sql=False, needs_plot=True, reasoning="décision LLM incohérente")
+        assert route.needs_sql is True
+
+    def test_does_not_affect_needs_sql_when_plot_not_requested(self):
+        route = QueryRoute(needs_sql=False, needs_plot=False, reasoning="question purement qualitative")
+        assert route.needs_sql is False
 
 
 # ============================================================

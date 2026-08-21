@@ -20,7 +20,7 @@ import logging
 import re
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from pydantic_ai import Agent
 
 from .config import MISTRAL_API_KEY, MODEL_NAME
@@ -42,6 +42,25 @@ class QueryRoute(BaseModel):
         description="True si la question demande explicitement une visualisation/graphique (ajouté le 21/08/2026)"
     )
     reasoning: str = Field(..., min_length=1, max_length=300)
+
+    @model_validator(mode="after")
+    def _plot_requires_sql(self) -> "QueryRoute":
+        """
+        Garde-fou (corrigé le 21/08/2026) : un graphique n'a de sens que sur
+        des données chiffrées. Bug observé en test réel : le routeur LLM
+        pouvait renvoyer needs_plot=True avec needs_sql=False, ce qui
+        empêchait MistralChat.py d'exécuter le SQL Tool en amont — le texte
+        de réponse affirmait alors "donnée non disponible" (voire inventait
+        un exemple hypothétique) alors que le PlotTool, lui, ré-exécutait le
+        SQL Tool de son côté (voir plot_tool.py::run_plot_tool) et affichait
+        un vrai graphique : un texte et un graphique contradictoires dans la
+        même réponse. On force donc l'invariant ici, au niveau du modèle,
+        pour qu'il tienne quelle que soit la source de la décision (LLM ou
+        heuristique de repli).
+        """
+        if self.needs_plot and not self.needs_sql:
+            self.needs_sql = True
+        return self
 
 
 _HEURISTIC_KEYWORDS = re.compile(
