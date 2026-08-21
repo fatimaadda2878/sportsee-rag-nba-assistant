@@ -141,7 +141,7 @@ Question : "Top 3 passeurs de la saison ?"
 - Mécanisme `NO_DATA` explicite plutôt qu'une hallucination
 - Vérification que toute valeur citée (nom de joueur, équipe) provient bien de la question posée
 
-**34 tests unitaires (pytest)** — routeur, SQL Tool, validation Pydantic, 100% verts, sans appel API ni base de données
+**54 tests unitaires (pytest)** — routeur, SQL Tool, PlotTool, validation Pydantic, 100% verts, sans appel API ni base de données
 
 **Observabilité en continu (Pydantic Logfire)** — chaque étape du pipeline est tracée (recherche vectorielle, appel SQL, génération), dashboard consultable en temps réel
 

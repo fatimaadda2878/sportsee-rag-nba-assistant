@@ -365,8 +365,10 @@ de secours afin que l'application reste utilisable.
 
 ### Bugs identifiés grâce à l'observabilité
 
-L'activation réelle de Logfire a permis d'identifier deux problèmes qui
-étaient auparavant masqués par le mode dégradé.
+L'activation réelle de Logfire, complétée par l'évaluation RAGAS et des
+tests manuels en conditions réelles, a permis d'identifier sept problèmes
+qui étaient auparavant masqués par le mode dégradé ou non couverts par les
+tests automatisés.
 
 **1. Incompatibilité des appels `logfire.warning()`**
 
@@ -432,6 +434,19 @@ de signaler l'ambiguïté. Corrigé avec un nouveau garde-fou
 (`utils/sql_tool.py::_uses_only_values_from_question`) qui rejette toute
 requête générée référençant une valeur absente de la question d'origine,
 testé unitairement.
+
+**7. Réponse texte et graphique contradictoires (routage incohérent)**
+
+Détecté par un test manuel en conditions réelles sur Streamlit (21/08/2026) :
+pour une question demandant un graphique, le routeur LLM pouvait renvoyer
+`needs_plot=True` avec `needs_sql=False` — une combinaison incohérente. Le
+SQL Tool n'était alors pas exécuté pour le texte de réponse (qui affirmait
+« donnée non disponible », voire inventait un exemple hypothétique), alors
+que le PlotTool, lui, ré-exécutait le SQL Tool de son côté et affichait un
+graphique correct. Corrigé par un `@model_validator` sur `QueryRoute`
+(`utils/router.py`) forçant `needs_sql=True` dès que `needs_plot=True`,
+comme invariant du modèle plutôt que simple consigne de prompt — voir aussi
+`Rapport_Evaluation_RAG.md` section 8.2.
 
 ------------------------------------------------------------------------
 
@@ -708,9 +723,10 @@ Lancer les tests avec :
 pytest tests/
 ```
 
-52 tests unitaires (`tests/test_guardrails.py`), sans appel API ni base de
-données : garde-fous du SQL Tool, routeur, PlotTool (dont le garde-fou
-anti-fabrication de données), et dégradation gracieuse de l'OCR sans clé.
+54 tests unitaires (`tests/test_guardrails.py`), sans appel API ni base de
+données : garde-fous du SQL Tool, routeur (dont l'invariant
+needs_plot⇒needs_sql), PlotTool (dont le garde-fou anti-fabrication de
+données), et dégradation gracieuse de l'OCR sans clé.
 
 Le fichier `tests/test_questions.py` sert également de benchmark métier
 à l'évaluation RAGAS.
@@ -728,7 +744,7 @@ python evaluate_ocr.py
 
 **Déjà livré** (initialement listé ici comme piste, réalisé depuis) :
 tests unitaires dédiés au routeur, au SQL Tool et aux garde-fous
-(`tests/test_guardrails.py`, 52 tests) ; fallback OCR Nanonets pour les
+(`tests/test_guardrails.py`, 54 tests) ; fallback OCR Nanonets pour les
 rapports scannés ; PlotTool pour la génération dynamique de graphiques.
 
 Pistes restantes :
