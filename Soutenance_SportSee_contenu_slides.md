@@ -1,5 +1,5 @@
 # Support de soutenance — SportSee NBA Analyst AI
-### Contenu prêt à transférer dans PowerPoint / Google Slides — 10 slides, ~12 minutes
+### Contenu prêt à transférer dans PowerPoint / Google Slides — 10 slides (+1 optionnelle : 8bis), ~12 minutes
 
 > Mon sandbox de génération de fichiers (.pptx) est indisponible pendant cette session. Ce document contient tout le contenu, slide par slide, avec les notes orateur — à copier-coller directement. Dès que l'environnement technique est de nouveau disponible, je peux te générer le vrai fichier `.pptx` à partir de ce même contenu.
 
@@ -149,6 +149,26 @@ Question : "Top 3 passeurs de la saison ?"
 
 **Notes orateur** :
 "Au-delà de l'évaluation RAGAS, qui mesure la qualité des réponses, j'ai construit une couche de fiabilité indépendante : des garde-fous qui empêchent le SQL Tool de sortir de son périmètre, des tests unitaires qui vérifient que ces garde-fous continuent de fonctionner à chaque modification du code, et une observabilité en continu pour détecter tout problème en production, pas seulement au moment de l'évaluation."
+
+---
+
+## Slide 8bis — Aller plus loin : OCR (Nanonets) et PlotTool
+
+*(Optionnelle si le temps est serré — sinon 1 min max, pour montrer que le travail sur ces deux points n'a pas été perdu)*
+
+**OCR — remplacement d'EasyOCR par Nanonets OCR**
+- Fallback automatique quand un PDF n'a pas de couche de texte (rapport scanné)
+- Évaluation avant/après reproductible : `evaluate_ocr.py`, sur un document de test synthétique (texte de référence connu, rendu en image, sans OCR le texte extrait est **vide** — 0 caractère, similarité 0,00)
+- Avec le fallback OCR Nanonets actif : **413 caractères restitués, similarité de 0,9757** avec le texte de référence — amélioration de **+0,98**
+
+**PlotTool — génération dynamique de graphiques**
+- Le chatbot peut désormais produire un graphique (barres/courbe/camembert) sur demande explicite ("montre un graphique de...")
+- Garde-fou important : le PlotTool ne réutilise QUE les données déjà validées par le SQL Tool — il ne peut pas inventer une valeur, seul le type de graphique est choisi automatiquement
+
+**Visuel suggéré** : deux mini-captures d'écran (un graphique généré en direct + le score OCR avant/après).
+
+**Notes orateur** :
+"Deux fonctionnalités demandées en complément du périmètre principal : un OCR de secours pour les rapports scannés, et un outil de visualisation. J'ai gardé le même principe de sécurité que pour le SQL Tool : aucun de ces deux ajouts ne peut inventer une donnée — l'OCR échoue proprement sans clé API, et le PlotTool ne trace que des chiffres déjà vérifiés par le SQL Tool."
 
 ---
 

@@ -18,9 +18,12 @@ Couverture :
     - utils.sql_tool._is_safe_select   : rejet DML/DDL, requêtes empilées, non-SELECT
     - utils.sql_tool._enforce_limit    : ajout du LIMIT si absent, pas de doublon si déjà présent
     - utils.sql_tool._clean_generated_sql : nettoyage des fences markdown, préservation de NO_DATA
-    - utils.router._heuristic_route    : filet de sécurité sans appel LLM
+    - utils.router._heuristic_route    : filet de sécurité sans appel LLM (needs_sql, needs_plot)
     - utils.schemas.SQLToolInput       : anti-injection basique sur la question utilisateur
     - utils.schemas.PlayerSeasonStatRow: cohérence fgm <= fga (garde-fou d'ingestion)
+    - utils.plot_tool                  : choix du type de graphique, garde-fou anti-fabrication
+      de données (aucune valeur générée hors de rows_preview du SQL Tool)
+    - utils.data_loader                : fallback OCR ne plante jamais sans clé API configurée
 """
 from __future__ import annotations
 
@@ -31,7 +34,9 @@ from utils.sql_tool import (
     _is_safe_select, _enforce_limit, _clean_generated_sql, _uses_only_values_from_question,
 )
 from utils.router import _heuristic_route
-from utils.schemas import SQLToolInput, PlayerSeasonStatRow
+from utils.schemas import SQLToolInput, PlayerSeasonStatRow, SQLToolOutput
+from utils.plot_tool import _choose_chart_type, _extract_labels_and_values, run_plot_tool
+from utils.data_loader import extract_text_with_ocr_nanonets
 
 
 # ============================================================
@@ -237,3 +242,111 @@ class TestPlayerSeasonStatRowValidation:
         invalid_row = dict(self._BASE_ROW, player_name="   ")
         with pytest.raises(ValidationError):
             PlayerSeasonStatRow(**invalid_row)
+
+
+# ============================================================
+# utils.router._heuristic_route : détection needs_plot (ajouté le 21/08/2026)
+# ============================================================
+
+class TestHeuristicRouteNeedsPlot:
+    def test_detects_explicit_chart_request(self):
+        route = _heuristic_route("Montre-moi un graphique des points par équipe")
+        assert route.needs_plot is True
+        assert route.needs_sql is True  # un graphique implique des données chiffrées
+
+    def test_detects_evolution_keyword(self):
+        route = _heuristic_route("Montre l'évolution du score du joueur X sur la saison")
+        assert route.needs_plot is True
+
+    def test_plain_numeric_question_does_not_trigger_plot(self):
+        # Une question chiffrée classique ne doit PAS déclencher un graphique
+        # par défaut : le PlotTool ne se déclenche que sur demande explicite.
+        route = _heuristic_route("Combien de points au total Trae Young a-t-il marqués ?")
+        assert route.needs_plot is False
+
+    def test_pure_qualitative_question_does_not_trigger_plot(self):
+        route = _heuristic_route("Que pensent les fans du jeu des Timberwolves en playoffs ?")
+        assert route.needs_plot is False
+
+
+# ============================================================
+# utils.plot_tool._choose_chart_type (heuristique sans appel LLM)
+# ============================================================
+
+class TestPlotToolChartType:
+    def test_evolution_keyword_selects_line_chart(self):
+        assert _choose_chart_type("Montre l'évolution des points de Trae Young") == "line"
+
+    def test_repartition_keyword_selects_pie_chart(self):
+        assert _choose_chart_type("Quelle est la répartition des points par équipe ?") == "pie"
+
+    def test_default_is_bar_chart(self):
+        assert _choose_chart_type("Compare les rebonds des 3 meilleurs joueurs") == "bar"
+
+
+# ============================================================
+# utils.plot_tool._extract_labels_and_values / run_plot_tool
+#
+# Garde-fou central du PlotTool : il ne doit JAMAIS inventer de valeur — il
+# ne peut représenter que des lignes déjà retournées par le SQL Tool.
+# ============================================================
+
+class TestPlotToolNoDataFabrication:
+    def test_extracts_label_and_numeric_column(self):
+        sql_output = SQLToolOutput(
+            generated_sql="SELECT ...", row_count=2,
+            columns=["player_name", "pts_total"],
+            rows_preview=[
+                {"player_name": "Trae Young", "pts_total": 1200},
+                {"player_name": "Nikola Jokic", "pts_total": 1100},
+            ],
+        )
+        labels, values, value_col = _extract_labels_and_values(sql_output)
+        assert labels == ["Trae Young", "Nikola Jokic"]
+        assert values == [1200.0, 1100.0]
+        assert value_col == "pts_total"
+
+    def test_raises_when_no_numeric_column(self):
+        sql_output = SQLToolOutput(
+            generated_sql="SELECT ...", row_count=1,
+            columns=["player_name"], rows_preview=[{"player_name": "X"}],
+        )
+        with pytest.raises(ValueError):
+            _extract_labels_and_values(sql_output)
+
+    def test_run_plot_tool_returns_error_when_sql_failed(self):
+        sql_output = SQLToolOutput(generated_sql="", row_count=0, error="Donnée non disponible.")
+        result = run_plot_tool("Montre un graphique", sql_output=sql_output)
+        assert result.error is not None
+        assert result.chart_base64 is None
+
+    def test_run_plot_tool_returns_error_when_no_rows(self):
+        sql_output = SQLToolOutput(generated_sql="SELECT ...", row_count=0, columns=[], rows_preview=[])
+        result = run_plot_tool("Montre un graphique", sql_output=sql_output)
+        assert result.error is not None
+
+    def test_run_plot_tool_generates_chart_from_real_sql_data(self):
+        sql_output = SQLToolOutput(
+            generated_sql="SELECT ...", row_count=3,
+            columns=["player_name", "pts_total"],
+            rows_preview=[
+                {"player_name": "Trae Young", "pts_total": 1200},
+                {"player_name": "Nikola Jokic", "pts_total": 1100},
+                {"player_name": "Tyrese Haliburton", "pts_total": 950},
+            ],
+        )
+        result = run_plot_tool("Top 3 marqueurs de la saison", sql_output=sql_output)
+        assert result.error is None
+        assert result.chart_base64 is not None
+        assert result.chart_type == "bar"
+
+
+# ============================================================
+# utils.data_loader.extract_text_with_ocr_nanonets : jamais de crash sans clé
+# ============================================================
+
+class TestOcrFallbackGracefulDegradation:
+    def test_returns_none_without_api_key(self, monkeypatch):
+        monkeypatch.setattr("utils.data_loader.NANONETS_API_KEY", None)
+        result = extract_text_with_ocr_nanonets("fichier_inexistant.pdf")
+        assert result is None

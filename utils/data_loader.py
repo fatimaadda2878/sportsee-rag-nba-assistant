@@ -7,23 +7,99 @@ from pathlib import Path
 from typing import List, Dict, Optional, Union
 import logging
 
+from .config import NANONETS_API_KEY, OCR_FALLBACK_MIN_CHARS
+
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # --- Fonctions d'extraction de texte ---
 
+NANONETS_EXTRACTION_ENDPOINT = "https://extraction-api.nanonets.com/api/v1/extract/sync"
+
+
+def extract_text_with_ocr_nanonets(file_path: str) -> Optional[str]:
+    """
+    OCR de secours via l'API Nanonets/Docstrange (ajouté le 21/08/2026, à la
+    demande de Sarah : "remplace EasyOCR par Nanonets OCR").
+
+    N'est appelé QUE si l'extraction standard (PyPDF2) échoue, c'est-à-dire
+    pour des PDF scannés/rapports en image sans couche de texte. Nécessite
+    NANONETS_API_KEY (compte gratuit : https://docstrange.nanonets.com,
+    récupérer la clé dans le menu en haut à droite une fois connecté). Sans
+    clé configurée, retourne None silencieusement (pas de crash de
+    l'ingestion) : voir extract_text_from_pdf.
+
+    NB (21/08/2026) : implémenté en appel HTTP direct (requests + Bearer
+    token) plutôt qu'avec le package `ocr-nanonets-wrapper`. Ce package
+    cible l'ancienne API "app.nanonets.com/api/v2/OCR/FullText" (clé
+    obtenue sur app.nanonets.com/#/keys) et, surtout, appelle `sys.exit()`
+    en cas de clé invalide — inacceptable dans un pipeline qui doit
+    dégrader gracieusement. L'API actuelle (docstrange.nanonets.com) est un
+    produit distinct, avec ses propres clés : une clé de l'ancienne API ne
+    fonctionne pas ici, et inversement.
+    """
+    if not NANONETS_API_KEY:
+        logging.warning(
+            f"OCR Nanonets non tenté pour {file_path} : NANONETS_API_KEY absente "
+            f"du .env (voir .env.example)."
+        )
+        return None
+    try:
+        with open(file_path, "rb") as f:
+            response = requests.post(
+                NANONETS_EXTRACTION_ENDPOINT,
+                headers={"Authorization": f"Bearer {NANONETS_API_KEY}"},
+                files={"file": f},
+                data={"output_format": "markdown"},
+                timeout=60,
+            )
+        if response.status_code in (401, 403):
+            logging.error(
+                f"OCR Nanonets : authentification refusée ({response.status_code}) pour "
+                f"{file_path}. Vérifiez que NANONETS_API_KEY provient bien de "
+                f"https://docstrange.nanonets.com (et non de l'ancienne page "
+                f"app.nanonets.com/#/keys, incompatible). Détail : {response.text[:200]}"
+            )
+            return None
+        response.raise_for_status()
+        payload = response.json()
+        if not payload.get("success"):
+            logging.warning(f"OCR Nanonets : extraction non réussie pour {file_path} : {payload}")
+            return None
+        text = (payload.get("result") or {}).get("markdown", {}).get("content")
+        if text and text.strip():
+            logging.info(f"OCR Nanonets réussi pour {file_path} ({len(text)} caractères).")
+            return text
+        logging.warning(f"OCR Nanonets n'a extrait aucun texte pour {file_path}.")
+        return None
+    except requests.exceptions.RequestException as e:
+        logging.error(f"Erreur réseau OCR Nanonets pour {file_path}: {e}")
+        return None
+    except Exception as e:
+        logging.error(f"Erreur OCR Nanonets pour {file_path}: {e}")
+        return None
+
+
 def extract_text_from_pdf(file_path: str) -> Optional[str]:
-    """Extrait le texte d'un fichier PDF (extraction standard, sans OCR)."""
+    """
+    Extrait le texte d'un fichier PDF : extraction standard (PyPDF2) d'abord,
+    puis OCR Nanonets en repli si le résultat est trop pauvre (PDF scanné/
+    rapport en image, sans couche de texte exploitable par PyPDF2).
+    """
     try:
         from PyPDF2 import PdfReader
         reader_pdf = PdfReader(file_path)
         text = "".join(page.extract_text() + "\n" for page in reader_pdf.pages if page.extract_text())
 
-        if len(text.strip()) < 100:
+        if len(text.strip()) < OCR_FALLBACK_MIN_CHARS:
             logging.warning(
                 f"Peu de texte trouvé dans {file_path} via extraction standard "
                 f"({len(text.strip())} caractères). Le fichier est peut-être un PDF "
-                f"scanné (image) : ce cas n'est pas géré (pas d'OCR dans ce projet)."
+                f"scanné (image) : tentative de fallback OCR (Nanonets)."
             )
+            ocr_text = extract_text_with_ocr_nanonets(file_path)
+            if ocr_text and len(ocr_text.strip()) > len(text.strip()):
+                return ocr_text
+            return text
         else:
             logging.info(f"Texte extrait de PDF: {file_path} ({len(text)} caractères)")
         return text

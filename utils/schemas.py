@@ -224,6 +224,30 @@ class SQLToolOutput(BaseModel):
 
 
 # ============================================================
+# 3bis. PlotTool (visualisation dynamique, ajouté le 21/08/2026)
+# ============================================================
+
+class PlotToolInput(BaseModel):
+    """Entrée du PlotTool : la question utilisateur en langage naturel."""
+    question: str = Field(..., min_length=3, max_length=500)
+
+
+class PlotToolOutput(BaseModel):
+    """
+    Sortie du PlotTool. Par design, le PlotTool ne génère JAMAIS ses propres
+    valeurs numériques : il réutilise exclusivement les lignes déjà validées
+    et récupérées par le SQL Tool (rows_preview d'un SQLToolOutput), pour ne
+    pas ouvrir un second point d'hallucination de données. Seul le type de
+    graphique (bar/line/pie) est choisi par un appel LLM léger.
+    """
+    chart_type: Optional[str] = None
+    chart_path: Optional[str] = None
+    chart_base64: Optional[str] = None
+    title: Optional[str] = None
+    error: Optional[str] = None
+
+
+# ============================================================
 # 4. Jeu de tests d'évaluation (RAGAS)
 # ============================================================
 

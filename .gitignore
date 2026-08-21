@@ -46,6 +46,8 @@ inputs/
 vector_db/
 database/*.db
 reports/*.csv
+data/ocr_test/
+data/plots/
 
 # Jupyter Notebook
 .ipynb_checkpoints

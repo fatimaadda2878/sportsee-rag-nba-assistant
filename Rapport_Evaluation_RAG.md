@@ -210,6 +210,33 @@ L'ajout du SQL Tool améliore mesurablement le système sur la comparaison final
 5. Configurer `LOGFIRE_TOKEN` en environnement de production pour un suivi continu des performances.
 6. Reproduire cette évaluation à chaque changement significatif de corpus ou de modèle de génération.
 
+## 8. Fonctionnalités additionnelles livrées (« aller plus loin »)
+
+En complément du périmètre obligatoire (RAG + SQL Tool + évaluation RAGAS ci-dessus), deux fonctionnalités demandées par Sarah dans le brief « aller plus loin » ont été implémentées et testées.
+
+### 8.1 Fallback OCR (Nanonets) pour les rapports scannés
+
+**Contexte** : le pipeline d'ingestion (`utils/data_loader.py`) ne traitait, avant cette évolution, que des PDF avec une couche de texte exploitable (extraction `PyPDF2`). Un PDF scanné (image pure, sans texte sélectionnable) — cas réaliste pour des rapports d'analyse — n'était pas géré et produisait un contenu quasi vide, silencieusement.
+
+**Implémentation** : un fallback OCR via l'API Nanonets (`extract_text_with_ocr_nanonets`) se déclenche automatiquement lorsque l'extraction standard renvoie moins de 100 caractères. Sans clé `NANONETS_API_KEY` configurée, ce fallback est désactivé proprement (pas d'exception, pas de blocage de l'ingestion) — testé unitairement dans `tests/test_guardrails.py::TestOcrFallbackGracefulDegradation`.
+
+**Évaluation avant/après** : aucun rapport scanné réel n'existant dans `inputs/` (uniquement des archives texte Reddit), `evaluate_ocr.py` génère un document de test synthétique reproductible — un texte de référence connu, rendu en image, puis enregistré en PDF sans couche de texte (donc illisible par l'extraction standard, comme un vrai scan). Le script mesure ensuite un score de similarité (`difflib.SequenceMatcher`) entre le texte extrait et le texte de référence :
+
+| Mode | Caractères extraits | Score de similarité |
+|---|---|---|
+| Avant (PyPDF2 seul) | 0 | 0,0000 |
+| Après (+ OCR Nanonets) | 413 | 0,9757 |
+
+Résultat mesuré le 21/08/2026 (`reports/ocr_before_after.csv`) : le cas « avant » confirme que l'extraction standard échoue bien totalement sur un document image pur (0 caractère, comme attendu pour un vrai rapport scanné). Le cas « après », avec le fallback OCR Nanonets actif, restitue **413 caractères avec une similarité de 0,9757** au texte de référence — une amélioration de **+0,9757**, qui démontre concrètement l'apport du fallback OCR sur un cas représentatif d'un rapport scanné, sans dépendre d'un vrai document indisponible dans ce projet.
+
+### 8.2 PlotTool : génération dynamique de graphiques
+
+**Implémentation** : `utils/plot_tool.py` génère un graphique (barres, courbe ou camembert) lorsqu'une visualisation est explicitement demandée (`route.needs_plot`, ajouté au routeur `QueryRoute`).
+
+**Choix de conception, et écart assumé par rapport au brief initial** : le brief suggérait un Tool LangChain généraliste, appelé par un agent qui structure lui-même les données à tracer. Le projet n'utilisant pas d'architecture d'agent LangChain (le routage repose sur Pydantic AI, voir section 2), et pour ne pas ouvrir un second point d'hallucination de données à côté du SQL Tool déjà sécurisé, le PlotTool a été conçu pour **réutiliser exclusivement les lignes déjà validées et retournées par le SQL Tool** : aucune valeur numérique n'est générée par un appel LLM. Seul le *type* de graphique est déterminé, par une heuristique de mots-clés sans appel API (même principe que le fallback heuristique du routeur, `utils/router.py::_heuristic_route`) — un choix de fiabilité délibéré, en particulier avant une démonstration en direct.
+
+Testé unitairement (`tests/test_guardrails.py::TestPlotToolChartType`, `TestPlotToolNoDataFabrication`) : choix du type de graphique, extraction des colonnes label/valeur, et surtout — le garde-fou central — retour d'une erreur explicite plutôt qu'un graphique fabriqué lorsque le SQL Tool n'a pas de donnée exploitable.
+
 ## Annexe — Jeu de questions de test complet
 
 Les 13 cas ci-dessous sont définis dans `tests/test_questions.py`. Les runs finaux conservés (section 4.1) couvrent les 13 cas des deux côtés (`before` et `after`), sur les 4 métriques RAGAS, sans valeur manquante.

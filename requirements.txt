@@ -43,6 +43,16 @@ python-docx==1.1.2
 tqdm==4.66.5
 requests==2.32.3
 
+# --- OCR (Nanonets/Docstrange) : fallback pour les PDF scannés / rapports en image ---
+# Compte gratuit : https://docstrange.nanonets.com (clé dans le menu en haut
+# à droite une fois connecté). Appel HTTP direct via `requests` (déjà une
+# dépendance ci-dessus) - voir utils/data_loader.py::extract_text_with_ocr_nanonets.
+# Sans NANONETS_API_KEY dans .env, l'OCR est simplement désactivé (aucun crash).
+
+# --- PlotTool : génération dynamique de graphiques ---
+matplotlib>=3.9
+Pillow>=10.4
+
 # --- Évaluation RAGAS ---
 ragas==0.1.19
 datasets==2.21.0

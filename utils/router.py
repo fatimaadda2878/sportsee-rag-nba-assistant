@@ -37,6 +37,10 @@ class QueryRoute(BaseModel):
         default=True,
         description="True si la question bénéficie aussi du contexte texte (rapports/archives)"
     )
+    needs_plot: bool = Field(
+        default=False,
+        description="True si la question demande explicitement une visualisation/graphique (ajouté le 21/08/2026)"
+    )
     reasoning: str = Field(..., min_length=1, max_length=300)
 
 
@@ -47,13 +51,25 @@ _HEURISTIC_KEYWORDS = re.compile(
 )
 _HEURISTIC_NUMBERS = re.compile(r"\d")
 
+# needs_plot : ajouté le 21/08/2026 (PlotTool). Mots-clés explicites de
+# demande de visualisation — volontairement restrictif (un graphique n'est
+# généré que si demandé clairement) plutôt qu'un déclenchement automatique
+# sur toute question chiffrée.
+_PLOT_KEYWORDS = re.compile(
+    r"(graphique|graph|visualise|visualisation|montre.*(évolution|evolution)|"
+    r"trace|courbe|camembert|diagramme|répartition|repartition)",
+    re.IGNORECASE,
+)
+
 
 def _heuristic_route(question: str) -> QueryRoute:
     """Filet de sécurité sans appel LLM : mots-clés statistiques ou chiffres présents."""
     needs_sql = bool(_HEURISTIC_KEYWORDS.search(question)) or bool(_HEURISTIC_NUMBERS.search(question))
+    needs_plot = bool(_PLOT_KEYWORDS.search(question))
     return QueryRoute(
-        needs_sql=needs_sql,
+        needs_sql=needs_sql or needs_plot,  # un graphique nécessite forcément des données chiffrées
         needs_text_context=True,
+        needs_plot=needs_plot,
         reasoning="Décision heuristique (fallback, sans appel LLM).",
     )
 
@@ -79,7 +95,11 @@ def _get_router_agent() -> Agent:
                 "needs_sql=True si répondre nécessite des chiffres/statistiques "
                 "précis (points, rebonds, %, comparaisons, classements, agrégations). "
                 "needs_text_context=True si le contexte qualitatif (rapports, avis, "
-                "actualités) reste utile en complément. Sois concis."
+                "actualités) reste utile en complément. "
+                "needs_plot=True UNIQUEMENT si l'utilisateur demande explicitement "
+                "une visualisation/un graphique (mots comme 'graphique', 'montre "
+                "l'évolution', 'trace', 'compare visuellement') — jamais par défaut "
+                "pour une simple question chiffrée. Sois concis."
             ),
         )
     return _router_agent
@@ -109,7 +129,7 @@ def route_query(question: str) -> QueryRoute:
             route = result.output
             logfire.info(
                 "query_routed", question=question, needs_sql=route.needs_sql,
-                needs_text_context=route.needs_text_context,
+                needs_text_context=route.needs_text_context, needs_plot=route.needs_plot,
             )
             return route
         except Exception as e:

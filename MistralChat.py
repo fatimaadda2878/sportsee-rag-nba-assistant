@@ -11,6 +11,7 @@ try:
     from utils.vector_store import VectorStoreManager
     from utils.router import route_query
     from utils.sql_tool import run_sql_tool
+    from utils.plot_tool import run_plot_tool
     from utils.observability import logfire
     from utils.mistral_client import chat_complete, MistralClientError
 except ImportError as e:
@@ -175,6 +176,20 @@ if prompt := st.chat_input(f"Posez votre question sur la {NAME}..."):
 
         sql_context = format_sql_context(sql_output)
 
+        # === 3bis. Génération du graphique (si demandé explicitement) ===
+        # Réutilise sql_output déjà calculé : pas de second appel SQL, et le
+        # PlotTool ne peut représenter que des données déjà validées par le
+        # SQL Tool (voir utils/plot_tool.py).
+        plot_output = None
+        if route.needs_plot:
+            try:
+                plot_output = run_plot_tool(prompt, sql_output=sql_output)
+                if plot_output.error:
+                    st.info(f"Graphique non généré : {plot_output.error}")
+            except Exception as e:
+                logging.exception("Erreur pendant run_plot_tool")
+                st.info(f"Une erreur est survenue lors de la génération du graphique : {e}")
+
         # === 4. Construction du prompt final et génération de la réponse ===
         final_prompt_for_llm = SYSTEM_PROMPT.format(
             text_context=text_context, sql_context=sql_context, question=prompt
@@ -187,6 +202,14 @@ if prompt := st.chat_input(f"Posez votre question sur la {NAME}..."):
             response_content = generer_reponse(messages_for_api)
             message_placeholder.write(response_content)
 
+            # Affichage du graphique généré par le PlotTool, s'il y en a un
+            if plot_output is not None and plot_output.chart_base64:
+                import base64
+                st.image(
+                    base64.b64decode(plot_output.chart_base64),
+                    caption=plot_output.title or "Graphique généré automatiquement",
+                )
+
             # Traçabilité visible pour les coachs/analystes (transparence sur les sources)
             if sql_output is not None and not sql_output.error and sql_output.row_count > 0:
                 with st.expander("🔎 Détail de la requête SQL utilisée"):
@@ -198,6 +221,7 @@ if prompt := st.chat_input(f"Posez votre question sur la {NAME}..."):
             question=prompt,
             used_sql=route.needs_sql,
             used_text_context=route.needs_text_context,
+            used_plot=route.needs_plot,
         )
 
 st.markdown("---")

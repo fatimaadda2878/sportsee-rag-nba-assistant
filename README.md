@@ -91,16 +91,20 @@ Le projet compare ainsi deux approches :
 ### Pipeline d'une question
 
 1.  L'utilisateur saisit sa question dans l'interface Streamlit.
-2.  `router.py` détermine si la question nécessite des données SQL.
+2.  `router.py` détermine si la question nécessite des données SQL et/ou
+    un graphique (`needs_sql`, `needs_text_context`, `needs_plot`).
 3.  Si nécessaire, la recherche vectorielle récupère jusqu'à **5
     chunks** pertinents dans FAISS.
 4.  Pour une question statistique, `sql_tool.py` génère puis exécute une
     requête SQL sécurisée.
-5.  Le contexte textuel et/ou les résultats SQL sont injectés dans le
+5.  Si un graphique est explicitement demandé, `plot_tool.py` génère un
+    graphique (barres/courbe/camembert) à partir des lignes déjà
+    retournées par le SQL Tool (voir section PlotTool ci-dessous).
+6.  Le contexte textuel et/ou les résultats SQL sont injectés dans le
     prompt final.
-6.  Mistral génère une réponse strictement fondée sur les informations
+7.  Mistral génère une réponse strictement fondée sur les informations
     récupérées.
-7.  Logfire trace les principales étapes du traitement.
+8.  Logfire trace les principales étapes du traitement.
 
 ------------------------------------------------------------------------
 
@@ -121,6 +125,8 @@ Le projet compare ainsi deux approches :
   Observabilité             Pydantic Logfire
   Tests                     Pytest
   Extraction documentaire   PyPDF2 / python-docx
+  OCR (fallback)            Nanonets/Docstrange OCR (appel HTTP direct)
+  Visualisation             PlotTool (Matplotlib)
 
 ------------------------------------------------------------------------
 
@@ -133,20 +139,23 @@ sportsee-rag-nba-assistant/
 ├── indexer.py                  # Construction de l'index FAISS
 ├── load_excel_to_db.py         # Ingestion Excel → SQLite
 ├── evaluate_ragas.py           # Évaluation comparative RAGAS
+├── evaluate_ocr.py             # Évaluation avant/après du fallback OCR
 │
 ├── utils/
 │   ├── config.py               # Configuration centralisée
-│   ├── data_loader.py          # Extraction PDF/DOCX/TXT/CSV/Excel
+│   ├── data_loader.py          # Extraction PDF/DOCX/TXT/CSV/Excel + fallback OCR Nanonets
 │   ├── db.py                   # Modèles SQLAlchemy
 │   ├── mistral_client.py       # Wrapper SDK Mistral
 │   ├── observability.py        # Configuration Logfire + fallback
-│   ├── router.py               # Routage Pydantic AI
+│   ├── plot_tool.py            # PlotTool : génération dynamique de graphiques
+│   ├── router.py               # Routage Pydantic AI (needs_sql / needs_text_context / needs_plot)
 │   ├── schemas.py              # Schémas Pydantic
 │   ├── sql_tool.py             # NL → SQL + garde-fous
 │   └── vector_store.py         # Chunking, embeddings et recherche FAISS
 │
 ├── tests/
-│   └── test_questions.py       # 13 cas métier catégorisés
+│   ├── test_questions.py       # 13 cas métier catégorisés (jeu RAGAS)
+│   └── test_guardrails.py      # Tests unitaires pytest (SQL Tool, routeur, PlotTool, OCR)
 │
 ├── docs/
 │   └── sql_examples.md         # Schéma et exemples SQL
@@ -268,16 +277,69 @@ Le routeur produit une sortie structurée :
 class QueryRoute(BaseModel):
     needs_sql: bool
     needs_text_context: bool
+    needs_plot: bool = False   # ajouté le 21/08/2026 (PlotTool)
     reasoning: str
 ```
 
 Les questions portant sur des statistiques, pourcentages, classements,
 points, rebonds, passes ou comparaisons peuvent ainsi être orientées
-vers le SQL Tool.
+vers le SQL Tool. `needs_plot` n'est activé que si l'utilisateur demande
+explicitement une visualisation (« graphique », « montre l'évolution »,
+« trace », etc.) — jamais par défaut sur une simple question chiffrée.
 
 Un **fallback heuristique** basé sur des mots-clés et expressions
 numériques est prévu si le routage LLM échoue ou si la clé Mistral n'est
 pas disponible.
+
+------------------------------------------------------------------------
+
+## 📊 PlotTool : génération dynamique de graphiques
+
+Ajouté le 21/08/2026 à la demande de Sarah (« génération dynamique de
+graphiques avec un PlotTool personnalisé »).
+
+Le PlotTool (`utils/plot_tool.py`) génère un graphique (barres, courbe ou
+camembert) directement dans la réponse, lorsqu'un graphique est
+explicitement demandé (`route.needs_plot`).
+
+**Choix de conception important** : le PlotTool ne génère jamais ses
+propres valeurs numériques. Il réutilise exclusivement les lignes déjà
+récupérées et validées par le SQL Tool (mêmes garde-fous anti-hallucination
+que la section précédente) — seul le *type* de graphique est déterminé,
+par une heuristique de mots-clés sans appel LLM supplémentaire (« évolution
+» → courbe, « répartition » → camembert, sinon → barres), sur le même
+principe que le fallback heuristique du routeur. Cela évite d'ouvrir un
+second point de fabrication de données dans le pipeline.
+
+Si le SQL Tool n'a renvoyé aucune donnée exploitable, le PlotTool renvoie
+une erreur explicite plutôt qu'un graphique inventé.
+
+------------------------------------------------------------------------
+
+## 🖼️ OCR (fallback Nanonets) pour les rapports scannés
+
+Ajouté le 21/08/2026 à la demande de Sarah (« remplace EasyOCR par
+Nanonets OCR »). L'extraction PDF standard (`PyPDF2`) reste la méthode
+principale ; si elle renvoie trop peu de texte (< 100 caractères, seuil
+`OCR_FALLBACK_MIN_CHARS`), un fallback OCR via l'API Nanonets est tenté
+automatiquement (`utils/data_loader.py::extract_text_with_ocr_nanonets`).
+
+Sans `NANONETS_API_KEY` configurée dans `.env`, l'OCR est simplement
+désactivé — aucune exception ne remonte, l'ingestion continue avec le
+texte (éventuellement vide) de l'extraction standard.
+
+Aucun rapport scanné réel n'étant disponible dans `inputs/` (uniquement
+des archives texte Reddit), `evaluate_ocr.py` génère un document de test
+synthétique reproductible (texte de référence connu, rendu en image puis
+enregistré en PDF sans couche de texte) afin de produire une évaluation
+avant/après honnête et reproductible :
+
+```
+python evaluate_ocr.py
+```
+
+Résultats écrits dans `reports/ocr_before_after.csv` (score de similarité
+au texte de référence, avant/après activation du fallback OCR).
 
 ------------------------------------------------------------------------
 
@@ -584,12 +646,19 @@ MISTRAL_API_KEY="..."
 LOGFIRE_TOKEN=""
 LOGFIRE_DISABLE=false
 DATABASE_URL="sqlite:///database/sportsee.db"
+NANONETS_API_KEY=""
 ```
 
 `MISTRAL_API_KEY` est nécessaire pour le fonctionnement complet du
 pipeline.
 
 Le token Logfire est optionnel.
+
+`NANONETS_API_KEY` est optionnelle : sans elle, le fallback OCR (rapports
+scannés) est simplement désactivé, sans erreur. Compte gratuit :
+<https://docstrange.nanonets.com> (clé dans le menu en haut à droite une
+fois connecté — attention, différent de l'ancienne page
+`app.nanonets.com/#/keys`, incompatible avec l'API actuelle).
 
 ------------------------------------------------------------------------
 
@@ -639,14 +708,30 @@ Lancer les tests avec :
 pytest tests/
 ```
 
+52 tests unitaires (`tests/test_guardrails.py`), sans appel API ni base de
+données : garde-fous du SQL Tool, routeur, PlotTool (dont le garde-fou
+anti-fabrication de données), et dégradation gracieuse de l'OCR sans clé.
+
 Le fichier `tests/test_questions.py` sert également de benchmark métier
 à l'évaluation RAGAS.
+
+Pour évaluer concrètement l'apport du fallback OCR (avant/après, sur un
+document de test synthétique généré automatiquement) :
+
+``` bash
+python evaluate_ocr.py
+```
 
 ------------------------------------------------------------------------
 
 ## 🔬 Pistes d'amélioration
 
-Les principales améliorations identifiées sont :
+**Déjà livré** (initialement listé ici comme piste, réalisé depuis) :
+tests unitaires dédiés au routeur, au SQL Tool et aux garde-fous
+(`tests/test_guardrails.py`, 52 tests) ; fallback OCR Nanonets pour les
+rapports scannés ; PlotTool pour la génération dynamique de graphiques.
+
+Pistes restantes :
 
 -   disposer de données NBA **match par match** avec date et statut
     domicile/extérieur ;
@@ -660,10 +745,10 @@ Les principales améliorations identifiées sont :
     `Stephen Curry`) ;
 -   mieux gérer les joueurs ayant changé d'équipe en cours de saison ;
 -   évaluer séparément chaque catégorie de question ;
--   ajouter des tests unitaires dédiés au routeur, au SQL Tool et aux
-    garde-fous ;
 -   tester une stratégie de routage réellement hybride lorsque texte et
-    SQL sont nécessaires simultanément.
+    SQL sont nécessaires simultanément ;
+-   étendre le PlotTool à des graphiques multi-séries (comparaison de
+    plusieurs joueurs sur un même graphique).
 
 ------------------------------------------------------------------------
 

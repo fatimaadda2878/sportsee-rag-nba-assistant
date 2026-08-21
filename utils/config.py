@@ -56,3 +56,18 @@ SQL_TOOL_MAX_ROWS = 200
 LOGFIRE_TOKEN = os.getenv("LOGFIRE_TOKEN")
 LOGFIRE_DISABLE = os.getenv("LOGFIRE_DISABLE", "false").lower() == "true"
 LOGFIRE_SERVICE_NAME = "sportsee-rag"
+
+# ============================================================
+# --- OCR (Nanonets/Docstrange) : fallback pour les PDF scannés (rapports en image) ---
+# ============================================================
+# Compte gratuit : https://docstrange.nanonets.com (clé dans le menu en haut
+# à droite une fois connecté — PAS la clé de l'ancienne page
+# app.nanonets.com/#/keys, incompatible avec l'API actuelle).
+# Si absente, l'OCR est simplement désactivé (pas de crash, extraction PDF
+# standard uniquement) — voir utils/data_loader.py.
+NANONETS_API_KEY = os.getenv("NANONETS_API_KEY")
+
+# Seuil (en caractères) en dessous duquel l'extraction PDF standard est
+# considérée comme un échec probable (PDF scanné/image) déclenchant le
+# fallback OCR.
+OCR_FALLBACK_MIN_CHARS = 100
