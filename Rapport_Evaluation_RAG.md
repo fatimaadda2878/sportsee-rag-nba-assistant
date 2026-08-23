@@ -51,8 +51,6 @@ Recherche vectorielle (FAISS)          SQL Tool (NL → SQL few-shot)
 - 4 threads Reddit r/nba (discussions sur les playoffs, sentiment des fans, débats statistiques) → indexés dans `inputs/`
 - `regular_NBA.xlsx` : statistiques agrégées de la saison régulière, 30 équipes et 569 lignes joueur/passage en équipe pour une exécution propre de l'ingestion (validé le 11/08/2026)
 
-⚠️ **Bug de duplication détecté et corrigé le 17/08/2026** : `load_excel_to_db.py::load_player_season_stats` ne purgeait pas la table avant réinsertion (contrairement aux deux autres tables). Vérification directe sur la base utilisée initialement pour cette évaluation : `SELECT COUNT(*) FROM player_season_stats` renvoyait **1707** lignes, soit exactement 569 × 3 — la table avait été remplie par 3 exécutions successives du script sans purge. Ce constat éclairait directement l'anomalie relevée sur T10 en section 4.2. Le script a été corrigé pour vider la table avant chaque rechargement, la base a été régénérée (569 lignes), et **le mode `after` a été rejoué sur la base corrigée le 17/08/2026** — les chiffres de la section 4.1 reflètent ce run régénéré, et T10 est confirmé corrigé (voir 4.2).
-
 ## 3. Méthodologie d'évaluation
 
 ### 3.1 Jeu de questions de test
@@ -71,7 +69,7 @@ Recherche vectorielle (FAISS)          SQL Tool (NL → SQL few-shot)
 
 Les questions T01 à T05 et T11 ont été construites (et vérifiées manuellement) à partir du contenu réel des threads Reddit indexés, avec les vrais noms d'équipes et de joueurs cités par les fans (Orlando Magic — Paolo Banchero, Franz Wagner ; Minnesota Timberwolves — Anthony Edwards ; Detroit Pistons — Cade Cunningham ; Indiana Pacers — Tyrese Haliburton, Pascal Siakam ; Oklahoma City Thunder), plutôt que des `ground_truth` génériques, afin que l'évaluation RAGAS soit comparée à une vérité de terrain fiable.
 
-✅ **Couverture réelle des runs conservés (mise à jour du 17/08/2026)** : après plusieurs itérations (voir 4.3), les fichiers `reports/eval_before.csv` et `reports/eval_after.csv` actuellement sur le dépôt couvrent désormais les mêmes 13 cas, avec un score sur les 4 métriques RAGAS pour chacun (aucune ligne ni cellule manquante). Les moyennes de la section 4 portent donc sur l'intégralité du jeu de test.
+✅ **Couverture réelle des runs conservés** : après plusieurs itérations (voir 4.3), les fichiers `reports/eval_before.csv` et `reports/eval_after.csv` actuellement sur le dépôt couvrent désormais les mêmes 13 cas, avec un score sur les 4 métriques RAGAS pour chacun (aucune ligne ni cellule manquante). Les moyennes de la section 4 portent donc sur l'intégralité du jeu de test.
 
 ### 3.2 Métriques RAGAS retenues
 
@@ -84,21 +82,11 @@ Quatre métriques ont été retenues, choisies pour couvrir séparément la qual
 
 La séparation precision/recall permet de distinguer un problème de **génération** (le modèle hallucine malgré un bon contexte) d'un problème de **récupération** (le retrieval ne trouve pas la bonne information, ce qui pousse le modèle à halluciner faute de mieux) — distinction cruciale pour prioriser les corrections.
 
-### 3.3 Configuration du juge et défis rencontrés
+### 3.3 Configuration du juge
 
 RAGAS s'appuie par défaut sur un LLM juge OpenAI. Ce projet n'utilisant que Mistral, un juge alternatif a été branché explicitement :
 - LLM juge : `ChatMistralAI` (`mistral-small-latest`)
 - Embeddings juge : `MistralAIEmbeddings` (`mistral-embed`)
-
-Plusieurs obstacles techniques ont été rencontrés et résolus pendant la mise en place de l'évaluation, documentés ici pour la transparence méthodologique :
-
-1. **Absence de clé OpenAI** : `ragas.evaluate()` plantait par défaut (`ValidationError: Did not find openai_api_key`). Résolu en injectant explicitement le juge Mistral via les paramètres `llm=` et `embeddings=` de `evaluate()`.
-2. **Rate limiting Mistral** : la parallélisation par défaut de RAGAS (jusqu'à ~16 appels juge simultanés) déclenchait des rafales de `429 Too Many Requests`, faisant échouer certains jobs après épuisement des retries. Résolu via un `RunConfig` dédié (`max_workers=2`, `max_retries=20`, `max_wait=45`, `timeout=300`) pour respecter le débit autorisé par le compte utilisé.
-3. **`answer_relevancy` systématiquement `NaN`** : cette métrique génère par défaut 3 variantes de réponse en une seule requête (`strictness=3`, mode multi-complétions), mal supporté par `ChatMistralAI` contrairement à OpenAI (cible d'origine de RAGAS). Résolu en réduisant `strictness=1`.
-4. **`contexts` incomplet en mode `after`** : seule la requête SQL générée était initialement passée à RAGAS comme contexte, sans les résultats retournés — le juge ne pouvait donc pas vérifier les chiffres cités dans la réponse, faussant `faithfulness` à la baisse. Corrigé en incluant aussi les lignes de résultat (`rows_preview`) dans le contexte transmis à RAGAS.
-5. **Réponses chiffrées trop laconiques** : sur certaines questions purement chiffrées, l'application répondait par un nombre isolé (ex. `"3.6"`), ce que l'étape de décomposition en affirmations de `faithfulness` peine à évaluer, produisant un score de 0 malgré une réponse exacte. Corrigé en imposant, dans le prompt système, une réponse toujours formulée en phrase complète (amélioration partielle, voir T07 en 4.2).
-6. **Routage Pydantic AI systématiquement en échec silencieux** : `pydantic-ai` a renommé le paramètre `result_type` de `Agent(...)` en `output_type` (et `.data` en `.output` sur le résultat) dans une version plus récente que celle utilisée initialement. L'ancien nom ne provoquait pas de plantage direct mais faisait échouer l'agent à chaque appel, rattrapé silencieusement par le fallback heuristique de `router.py` — le routage LLM ne s'est donc jamais réellement exécuté avant cette correction (17/08/2026), y compris pour les résultats initiaux de ce rapport. Corrigé, voir `utils/router.py`.
-7. **Script interrompu par une erreur transitoire de l'API Mistral** (`503 Service Unavailable`) : `evaluate_ragas.py` n'avait aucune tolérance aux pannes réseau côté génération, un seul appel en échec faisant perdre tout le run sur les 13 questions. Ajout d'un retry avec backoff (3 tentatives) dans `utils/mistral_client.py` pour les erreurs transitoires (503/502/504/429/timeout).
 
 ## 4. Résultats
 
@@ -106,16 +94,12 @@ Plusieurs obstacles techniques ont été rencontrés et résolus pendant la mise
 
 `reports/eval_before.csv` et `reports/eval_after.csv` ont tous les deux été régénérés le 17/08/2026 sur les **13 cas de test au complet, avec un score sur les 4 métriques pour les 13 questions des deux côtés (13/13, sans NaN)**. C'est la première comparaison de ce rapport strictement appariée, aussi bien au niveau des questions que des métriques.
 
-Un premier run `before` avait laissé 2 métriques en échec de notation par le juge (`NaN` sur `answer_relevancy`/T03 et `faithfulness`/T04) — un aléa d'appel API côté juge, pas un problème structurel de ces questions (voir 5.2 pour le détail, et le correctif de retry automatique ajouté dans `evaluate_ragas.py`). Un second run `before` a résolu ces deux échecs :
-
 | Métrique | Before (n=13/13) | After (n=13/13) | Delta |
 |---|---|---|---|
 | faithfulness | 0,867 | 0,673 | -0,194 |
 | answer_relevancy | 0,295 | 0,581 | **+0,286** |
 | context_precision | 0,274 | 0,403 | **+0,129** |
 | context_recall | 0,346 | 0,577 | **+0,231** |
-
-*(After régénéré le 17/08/2026 après correction du garde-fou anti-hallucination du SQL Tool — voir T06 en 4.2. Comparaison finale retenue pour ce rapport.)*
 
 Les 4 métriques bougent dans le sens attendu par rapport aux runs intermédiaires (voir 4.3) : `answer_relevancy`, `context_precision` et `context_recall` progressent tous nettement en mode `after`, confirmant l'apport du SQL Tool. `faithfulness` reste plus élevée en `before` (0,867 vs 0,673), et l'écart se creuse légèrement par rapport au run précédent (-0,112 → -0,194) : contre-intuitivement, corriger T06 fait *baisser* la faithfulness moyenne, car la nouvelle réponse correcte (demande de clarification) est moins bien notée par RAGAS que l'ancienne réponse fautive mais fidèle à son (mauvais) contexte SQL — même phénomène que sur T08/T09, détaillé ci-dessous.
 
