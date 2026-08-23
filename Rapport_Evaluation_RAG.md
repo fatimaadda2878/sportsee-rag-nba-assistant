@@ -1,7 +1,7 @@
 # Rapport de mise en place et d'évaluation du système RAG — SportSee NBA Analyst AI
 
 **Mission** : Évaluez les performances d'un LLM
-**Auteure** : Fatima Adda
+**Auteure** : Fatima Adda-Rezig
 **Date** : Août 2026
 
 ---
@@ -194,9 +194,9 @@ L'ajout du SQL Tool améliore mesurablement le système sur la comparaison final
 5. Configurer `LOGFIRE_TOKEN` en environnement de production pour un suivi continu des performances.
 6. Reproduire cette évaluation à chaque changement significatif de corpus ou de modèle de génération.
 
-## 8. Fonctionnalités additionnelles livrées (« aller plus loin »)
+## 8. OCR (Nanonets) et PlotTool
 
-En complément du périmètre obligatoire (RAG + SQL Tool + évaluation RAGAS ci-dessus), deux fonctionnalités demandées par Sarah dans le brief « aller plus loin » ont été implémentées et testées.
+Deux composants supplémentaires du système, implémentés et testés au même niveau d'exigence que le RAG et le SQL Tool présentés ci-dessus : un fallback OCR pour les rapports scannés, et un outil de génération dynamique de graphiques.
 
 ### 8.1 Fallback OCR (Nanonets) pour les rapports scannés
 
