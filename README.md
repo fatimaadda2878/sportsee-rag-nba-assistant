@@ -277,7 +277,7 @@ Le routeur produit une sortie structurée :
 class QueryRoute(BaseModel):
     needs_sql: bool
     needs_text_context: bool
-    needs_plot: bool = False   # ajouté le 21/08/2026 (PlotTool)
+    needs_plot: bool = False 
     reasoning: str
 ```
 
@@ -294,9 +294,6 @@ pas disponible.
 ------------------------------------------------------------------------
 
 ## 📊 PlotTool : génération dynamique de graphiques
-
-Ajouté le 21/08/2026 à la demande de Sarah (« génération dynamique de
-graphiques avec un PlotTool personnalisé »).
 
 Le PlotTool (`utils/plot_tool.py`) génère un graphique (barres, courbe ou
 camembert) directement dans la réponse, lorsqu'un graphique est
@@ -318,10 +315,8 @@ une erreur explicite plutôt qu'un graphique inventé.
 
 ## 🖼️ OCR (fallback Nanonets) pour les rapports scannés
 
-Ajouté le 21/08/2026 à la demande de Sarah (« remplace EasyOCR par
-Nanonets OCR »). L'extraction PDF standard (`PyPDF2`) reste la méthode
-principale ; si elle renvoie trop peu de texte (< 100 caractères, seuil
-`OCR_FALLBACK_MIN_CHARS`), un fallback OCR via l'API Nanonets est tenté
+L'extraction PDF standard (`PyPDF2`) reste la méthode principale ; si elle renvoie trop peu de texte 
+(< 100 caractères, seuil `OCR_FALLBACK_MIN_CHARS`), un fallback OCR via l'API Nanonets est tenté
 automatiquement (`utils/data_loader.py::extract_text_with_ocr_nanonets`).
 
 Sans `NANONETS_API_KEY` configurée dans `.env`, l'OCR est simplement
@@ -362,91 +357,6 @@ dashboard Logfire.
 
 Sans token valide, `utils/observability.py` bascule vers un logger local
 de secours afin que l'application reste utilisable.
-
-### Bugs identifiés grâce à l'observabilité
-
-L'activation réelle de Logfire, complétée par l'évaluation RAGAS et des
-tests manuels en conditions réelles, a permis d'identifier sept problèmes
-qui étaient auparavant masqués par le mode dégradé ou non couverts par les
-tests automatisés.
-
-**1. Incompatibilité des appels `logfire.warning()`**
-
-Le logger de secours exposait une méthode `warning()`, contrairement au
-SDK Logfire utilisé dans le projet. Les appels concernés dans le
-pipeline ont été remplacés par `logfire.info()`.
-
-**2. Streamlit + asyncio + Pydantic AI**
-
-`agent.run_sync()` échouait dans le thread `ScriptRunner` de Streamlit
-car aucun event loop asyncio n'y était créé automatiquement.
-
-`router.py` initialise désormais explicitement un event loop lorsqu'il
-n'en existe pas avant l'appel à Pydantic AI :
-
-``` python
-try:
-    asyncio.get_event_loop()
-except RuntimeError:
-    asyncio.set_event_loop(asyncio.new_event_loop())
-```
-
-Après correction, plusieurs traces `handle_user_question` ont été
-observées avec succès dans Logfire sans nouvelle exception liée à ces
-problèmes.
-
-**3. Routage Pydantic AI systématiquement en échec silencieux**
-
-`pydantic-ai` a renommé le paramètre `result_type` de `Agent(...)` en
-`output_type` (et `.data` en `.output` sur le résultat) dans une version
-plus récente que celle utilisée à l'écriture du code. L'ancien nom ne
-provoquait pas de plantage direct, mais faisait échouer l'agent à chaque
-appel — rattrapé silencieusement par le fallback heuristique de
-`router.py`. Le routage LLM ne s'exécutait donc jamais réellement avant
-cette correction. Corrigé dans `utils/router.py`.
-
-**4. Base `player_season_stats` triplée par une ingestion non idempotente**
-
-`load_excel_to_db.py::load_player_season_stats` insérait les lignes sans
-purger la table au préalable, contrairement aux deux autres tables
-(`teams`, `team_summary`) qui utilisent `session.merge()`. Relancer le
-script plusieurs fois empilait donc les stats joueurs au lieu de les
-remplacer : la base contenait 1707 lignes pour 569 joueurs réels
-(exactement × 3). Corrigé en purgeant la table avant chaque réinsertion —
-voir aussi `Rapport_Evaluation_RAG.md` pour l'impact sur l'évaluation
-RAGAS (cas de test T10).
-
-**5. Script d'évaluation interrompu par une erreur transitoire de l'API**
-
-`evaluate_ragas.py` n'avait aucune tolérance aux pannes réseau (ex. `503
-Service Unavailable` côté Mistral) : un seul appel en échec faisait
-perdre tout le run. Ajout d'un retry avec backoff dans
-`utils/mistral_client.py`, et d'un retry ciblé côté juge RAGAS pour les
-questions notées `NaN` (échec de notation silencieux) dans
-`evaluate_ragas.py`.
-
-**6. Le SQL Tool pouvait halluciner une valeur non demandée**
-
-Détecté via l'évaluation RAGAS (cas de test `T06`) : pour une question ne
-nommant aucun joueur, le générateur SQL inventait de lui-même un nom
-(`WHERE player_name = 'LeBron James'`) au lieu de répondre `NO_DATA` ou
-de signaler l'ambiguïté. Corrigé avec un nouveau garde-fou
-(`utils/sql_tool.py::_uses_only_values_from_question`) qui rejette toute
-requête générée référençant une valeur absente de la question d'origine,
-testé unitairement.
-
-**7. Réponse texte et graphique contradictoires (routage incohérent)**
-
-Détecté par un test manuel en conditions réelles sur Streamlit (21/08/2026) :
-pour une question demandant un graphique, le routeur LLM pouvait renvoyer
-`needs_plot=True` avec `needs_sql=False` — une combinaison incohérente. Le
-SQL Tool n'était alors pas exécuté pour le texte de réponse (qui affirmait
-« donnée non disponible », voire inventait un exemple hypothétique), alors
-que le PlotTool, lui, ré-exécutait le SQL Tool de son côté et affichait un
-graphique correct. Corrigé par un `@model_validator` sur `QueryRoute`
-(`utils/router.py`) forçant `needs_sql=True` dès que `needs_plot=True`,
-comme invariant du modèle plutôt que simple consigne de prompt — voir aussi
-`Rapport_Evaluation_RAG.md` section 8.2.
 
 ------------------------------------------------------------------------
 
@@ -503,7 +413,7 @@ Quatre métriques sont calculées :
 
 ### Scores moyens
 
-Comparaison finale (17/08/2026), strictement appariée sur les 13 cas de
+Comparaison finale, strictement appariée sur les 13 cas de
 test et les 4 métriques, sans valeur manquante des deux côtés (run
 `after` régénéré après correction du garde-fou anti-hallucination du SQL
 Tool, voir point 6 ci-dessous) :
