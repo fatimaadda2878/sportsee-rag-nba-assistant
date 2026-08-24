@@ -192,13 +192,11 @@ Le mapping a été validé sur le fichier fourni avec une ingestion de **30
 équipes et 569 lignes joueur/passage en équipe** (fichier source, une
 exécution propre de `load_excel_to_db.py`).
 
-⚠️ **Bug corrigé le 17/08/2026** : `load_player_season_stats` n'était pas
-idempotent (`session.add()` sans purge ni clé métier), donc relancer le
-script plusieurs fois empilait les lignes. La base a ainsi contenu jusqu'à
-**1707 lignes** dans `player_season_stats` (569 × 3, confirmant 3
-exécutions successives) avant correction. Le script vide désormais la table
-avant chaque réinsertion — relancer `python load_excel_to_db.py` une fois
-pour repartir sur une base propre.
+ℹ️ **Ingestion idempotente** : `load_player_season_stats` vide la table
+`player_season_stats` avant chaque réinsertion (pas de clé métier naturelle
+sur cette table, uniquement un identifiant auto-incrémenté). Relancer
+`python load_excel_to_db.py` plusieurs fois ne duplique donc jamais les
+lignes.
 
 ### ⚠️ Granularité des données
 
@@ -420,8 +418,7 @@ Quatre métriques sont calculées :
 ### Scores moyens
 
 Comparaison finale, strictement appariée sur les 13 cas de
-test et les 4 métriques, sans valeur manquante des deux côtés (run
-`after` post-migration LangChain + PostgreSQL, 24/08/2026) :
+test et les 4 métriques, sans valeur manquante des deux côtés :
 
   Métrique              Before --- texte seul   After --- routage + SQL   Évolution
   ------------------- ----------------------- ------------------------- -----------
@@ -452,13 +449,11 @@ textuelle seule est insuffisante.
 La **Faithfulness** diminue en revanche (0,867 → 0,757). Cette baisse a
 été analysée cas par cas (voir `Rapport_Evaluation_RAG.md`, section 4.2)
 et s'explique presque entièrement par une limite du juge RAGAS sur les
-réponses de refus/clarification (`NO_DATA`, cas `T08`/`T09`, et
-désormais `T06` une fois corrigé) et sur certaines réponses chiffrées
-courtes (`T07`) : RAGAS note plus sévèrement une réponse de clarification
-correcte qu'une réponse chiffrée fautive mais bien formulée. Corriger le
-bug applicatif de `T06` (voir `Rapport_Evaluation_RAG.md`, section 4.2) a
-d'ailleurs *fait baisser* ce score, un effet contre-intuitif mais cohérent
-avec ce biais de mesure.
+réponses de refus/clarification (`NO_DATA`, cas `T08`/`T09`/`T06`) et sur
+certaines réponses chiffrées courtes (`T07`) : RAGAS note plus sévèrement
+une réponse de clarification correcte qu'une réponse chiffrée fautive mais
+bien formulée — un effet contre-intuitif mais cohérent avec ce biais de
+mesure.
 
 ------------------------------------------------------------------------
 
@@ -696,15 +691,6 @@ python evaluate_ocr.py
 ------------------------------------------------------------------------
 
 ## 🔬 Pistes d'amélioration
-
-**Déjà livré** (initialement listé ici comme piste, réalisé depuis) :
-tests unitaires dédiés au routeur, au SQL Tool et aux garde-fous
-(`tests/test_guardrails.py`, 61 tests) ; fallback OCR Nanonets pour les
-rapports scannés ; PlotTool pour la génération dynamique de graphiques ;
-migration du SQL Tool sur LangChain (`create_sql_query_chain`) et de la
-base de données sur PostgreSQL.
-
-Pistes restantes :
 
 -   disposer de données NBA **match par match** avec date et statut
     domicile/extérieur ;

@@ -2,7 +2,6 @@
 
 **Mission** : Évaluez les performances d'un LLM
 **Auteure** : Fatima Adda-Rezig
-**Date** : Août 2026
 
 ---
 
@@ -39,17 +38,28 @@ Recherche vectorielle (FAISS)          SQL Tool (LangChain NL → SQL)
 |---|---|
 | `indexer.py` | Chunking (1500 caractères, 150 de chevauchement) + embeddings Mistral (`mistral-embed`) + index FAISS, à partir des archives texte de `inputs/` |
 | `load_excel_to_db.py` | Ingestion du fichier Excel source vers une base PostgreSQL (`teams`, `player_season_stats`, `team_summary`, `reports`) |
-| `utils/router.py` | Détermine si une question nécessite le SQL Tool (routage Pydantic AI) |
-| `utils/sql_tool.py` | Génération de requêtes SQL via LangChain (`create_sql_query_chain` + `ChatMistralAI`, repli automatique sur un appel direct Mistral) + exécution sécurisée (garde-fous : `SQL_TOOL_MAX_ROWS`, détection des questions non répondables → `NO_DATA`, anti-hallucination de valeurs) |
+| `utils/router.py` | Détermine si une question nécessite le SQL Tool et/ou un graphique (routage Pydantic AI) |
+| `utils/sql_tool.py` | Génération de requêtes SQL via LangChain (`create_sql_query_chain` + `ChatMistralAI`) + exécution sécurisée |
+| `utils/plot_tool.py` | Génération dynamique de graphiques (barres/courbe/camembert) à partir des données déjà validées par le SQL Tool |
 | `utils/vector_store.py` | Recherche vectorielle (top-k=5) dans l'index FAISS |
 | `MistralChat.py` | Application Streamlit (UI + orchestration) |
 | `evaluate_ragas.py` | Script d'audit RAGAS, modes `before` (texte seul) et `after` (texte + SQL Tool) |
-| `tests/test_guardrails.py` | Tests unitaires (pytest) du routeur, du SQL Tool et des garde-fous de validation — complémentaire à l'évaluation RAGAS ci-dessus, sans appel LLM ni base de données |
+| `tests/test_guardrails.py` | Tests unitaires (pytest) du routeur, du SQL Tool, du PlotTool et des garde-fous de validation — complémentaire à l'évaluation RAGAS ci-dessous, sans appel LLM ni base de données |
 | `utils/observability.py` | Instrumentation Pydantic Logfire (traçage de chaque étape : chunking, recherche vectorielle, appel SQL, génération) |
 
 **Sources de données** :
 - 4 threads Reddit r/nba (discussions sur les playoffs, sentiment des fans, débats statistiques) → indexés dans `inputs/`
-- `regular_NBA.xlsx` : statistiques agrégées de la saison régulière, 30 équipes et 569 lignes joueur/passage en équipe pour une exécution propre de l'ingestion
+- `regular_NBA.xlsx` : statistiques agrégées de la saison régulière, 30 équipes et 569 lignes joueur/passage en équipe
+
+### 2.1 SQL Tool : génération NL → SQL via LangChain
+
+La génération de la requête SQL à partir de la question en langage naturel s'appuie sur LangChain : `create_sql_query_chain`, associé à `SQLDatabase` (introspection du schéma PostgreSQL via SQLAlchemy) et `ChatMistralAI`. Un repli automatique et transparent sur un appel direct au SDK Mistral est prévu si la chaîne LangChain échoue à s'initialiser ou à répondre — même philosophie de dégradation gracieuse que le routeur heuristique et le fallback OCR (section 8.1).
+
+Choix architectural : LangChain est utilisé uniquement pour la *génération* de la requête SQL, jamais pour son *exécution*. `create_sql_query_chain` renvoie une chaîne de caractères SQL sans l'exécuter — contrairement à `create_sql_agent`, qui exécute lui-même la requête dans sa propre boucle d'agent, ce qui rendrait beaucoup plus difficile l'application des garde-fous de sécurité (`_is_safe_select`, `_uses_only_values_from_question`, `_enforce_limit`, détection `NO_DATA`). Ceux-ci restent appliqués systématiquement en post-traitement, entre la génération LangChain et l'exécution SQLAlchemy — aucun garde-fou n'est affaibli ou contourné par ce choix.
+
+### 2.2 Base de données : PostgreSQL
+
+La base de données applicative est PostgreSQL (`SQL_DATABASE_URL` dans `utils/config.py`). Le schéma relationnel (`utils/db.py`) est conçu pour être agnostique du dialecte SQL via SQLAlchemy : aucune modification du code ORM n'est nécessaire pour basculer d'un moteur à l'autre, seule la configuration change. SQLite reste disponible en dépannage (démo hors-ligne sans serveur disponible) en changeant uniquement `DATABASE_URL` dans `.env`.
 
 ## 3. Méthodologie d'évaluation
 
@@ -69,7 +79,7 @@ Recherche vectorielle (FAISS)          SQL Tool (LangChain NL → SQL)
 
 Les questions T01 à T05 et T11 ont été construites (et vérifiées manuellement) à partir du contenu réel des threads Reddit indexés, avec les vrais noms d'équipes et de joueurs cités par les fans (Orlando Magic — Paolo Banchero, Franz Wagner ; Minnesota Timberwolves — Anthony Edwards ; Detroit Pistons — Cade Cunningham ; Indiana Pacers — Tyrese Haliburton, Pascal Siakam ; Oklahoma City Thunder), plutôt que des `ground_truth` génériques, afin que l'évaluation RAGAS soit comparée à une vérité de terrain fiable.
 
-✅ **Couverture réelle des runs conservés** : après plusieurs itérations (voir 4.3), les fichiers `reports/eval_before.csv` et `reports/eval_after.csv` actuellement sur le dépôt couvrent désormais les mêmes 13 cas, avec un score sur les 4 métriques RAGAS pour chacun (aucune ligne ni cellule manquante). Les moyennes de la section 4 portent donc sur l'intégralité du jeu de test.
+✅ **Couverture des runs conservés** : `reports/eval_before.csv` et `reports/eval_after.csv` couvrent les 13 cas, avec un score sur les 4 métriques RAGAS pour chacun (aucune ligne ni cellule manquante). Les moyennes de la section 4 portent donc sur l'intégralité du jeu de test.
 
 ### 3.2 Métriques RAGAS retenues
 
@@ -92,7 +102,7 @@ RAGAS s'appuie par défaut sur un LLM juge OpenAI. Ce projet n'utilisant que Mis
 
 ### 4.1 Tableau comparatif before / after, avec seuils cibles
 
-`reports/eval_before.csv` et `reports/eval_after.csv` couvrent tous les deux les **13 cas de test au complet, avec un score sur les 4 métriques pour les 13 questions des deux côtés (13/13, sans NaN)**. Le run `after` ci-dessous est le run **final, post-migration** (24/08/2026) : génération SQL via LangChain (section 9.1) et base PostgreSQL (section 9.2), et non plus l'ancienne implémentation SDK Mistral direct + SQLite. Le run `after` pré-migration (0,673 / 0,581 / 0,403 / 0,577) est conservé en 4.3 à titre de comparaison — les deux runs restent cohérents dans leurs tendances.
+`reports/eval_before.csv` et `reports/eval_after.csv` couvrent tous les deux les **13 cas de test au complet, avec un score sur les 4 métriques pour les 13 questions des deux côtés (13/13, sans NaN)**.
 
 **Seuils cibles retenus** : en l'absence de seuils imposés par le brief, les valeurs ci-dessous reprennent l'ordre de grandeur usuellement recommandé pour un système RAG jugé fiable en production (≥ 0,70 sur les 4 métriques, avec une exigence renforcée à 0,80 sur `faithfulness` compte tenu du risque d'hallucination sur un chatbot d'analyse de données chiffrées). Ils servent de repère d'interprétation, pas de critère de blocage automatique — voir l'analyse sous le tableau.
 
@@ -103,47 +113,27 @@ RAGAS s'appuie par défaut sur un LLM juge OpenAI. Ce projet n'utilisant que Mis
 | context_precision | ≥ 0,70 | 0,274 ❌ | 0,366 | **+0,092** | ❌ |
 | context_recall | ≥ 0,70 | 0,346 ❌ | 0,615 | **+0,269** | ❌ |
 
-Les 4 métriques bougent dans le sens attendu par rapport aux runs intermédiaires (voir 4.3) : `answer_relevancy`, `context_precision` et `context_recall` progressent tous nettement en mode `after`, confirmant l'apport du SQL Tool. `faithfulness` reste plus élevée en `before` (0,867 vs 0,757), pour la même raison que sur les runs précédents : les réponses de refus/clarification correctes (T06, T08, T09) sont mal notées par RAGAS — voir 4.2. Par rapport à l'ancienne implémentation (SDK direct + SQLite, `faithfulness` = 0,673), le run post-migration LangChain + PostgreSQL est même légèrement meilleur sur les 4 métriques simultanément (`faithfulness` +0,084, `answer_relevancy` -0,046, `context_precision` -0,037, `context_recall` +0,038 par rapport à l'ancien `after`) — des écarts de cet ordre restent dans la marge de variance du juge LLM déjà documentée (voir T07 en 4.2), donc à interpréter comme "les deux implémentations sont fonctionnellement équivalentes", pas comme une amélioration attribuable à LangChain en tant que tel.
+`answer_relevancy`, `context_precision` et `context_recall` progressent tous nettement en mode `after`, confirmant l'apport du SQL Tool. `faithfulness` reste plus élevée en `before` (0,867 vs 0,757) : les réponses de refus/clarification correctes (T06, T08, T09) sont mal notées par RAGAS — voir 4.2.
 
-**Lecture honnête par rapport aux seuils** : aucune métrique n'atteint son seuil cible en mode `after` sur ce jeu de 13 questions. Deux facteurs limitent directement la portée de ce résultat, tous deux documentés en 4.2 : (1) RAGAS note très mal les réponses de refus légitimes (`NO_DATA`, T08/T09) et les demandes de clarification (T06 corrigé) — 4 des 13 cas sur 13 sont volontairement conçus pour déclencher ce type de réponse, ce qui tire mécaniquement `faithfulness` et `answer_relevancy` vers le bas alors que le comportement métier est correct ; (2) l'échantillon (13 questions) est trop restreint pour une mesure stable au sens statistique — voir la variance entre runs intermédiaires en 4.3. La progression relative (`answer_relevancy` +0,240, `context_recall` +0,269, `context_precision` +0,092) reste néanmoins le signal le plus fiable de ce rapport : elle démontre l'apport du SQL Tool indépendamment du seuil absolu. Pour une mise en production, ce rapport recommande un jeu de test élargi (50+ questions) et une métrique de type "taux de refus correctement identifiés" en complément de RAGAS, qui n'est pas conçu pour évaluer ce cas.
+**Lecture honnête par rapport aux seuils** : aucune métrique n'atteint son seuil cible en mode `after` sur ce jeu de 13 questions. Deux facteurs limitent directement la portée de ce résultat, tous deux documentés en 4.2 : (1) RAGAS note très mal les réponses de refus légitimes (`NO_DATA`, T08/T09) et les demandes de clarification (T06) — 4 des 13 cas sur 13 sont volontairement conçus pour déclencher ce type de réponse, ce qui tire mécaniquement `faithfulness` et `answer_relevancy` vers le bas alors que le comportement métier est correct ; (2) l'échantillon (13 questions) est trop restreint pour une mesure stable au sens statistique. La progression relative (`answer_relevancy` +0,240, `context_recall` +0,269, `context_precision` +0,092) reste néanmoins le signal le plus fiable de ce rapport : elle démontre l'apport du SQL Tool indépendamment du seuil absolu. Pour une mise en production, ce rapport recommande un jeu de test élargi (50+ questions) et une métrique de type "taux de refus correctement identifiés" en complément de RAGAS, qui n'est pas conçu pour évaluer ce cas.
 
 ### 4.2 Analyse détaillée (exemples vérifiés ligne par ligne dans les CSV)
 
-Les exemples ci-dessous ont été vérifiés ligne par ligne sur le run `after` pré-migration (SDK Mistral direct + SQLite, 17/08/2026). Le comportement métier décrit (NO_DATA, demande de clarification, garde-fous) reste identique sur le run post-migration LangChain + PostgreSQL (24/08/2026, section 4.1) — les guard-fous n'ont pas changé — mais les scores RAGAS exacts cités ci-dessous (issus du juge LLM, non déterministe) peuvent légèrement différer d'une exécution à l'autre, y compris entre les deux implémentations, comme discuté en 4.1.
-
 **Ce qui s'améliore avec le SQL Tool** — `answer_relevancy`, `context_precision` et `context_recall` progressent tous nettement, confirmant que les questions chiffrées et mixtes ne sont pas répondables correctement avec le texte seul.
 
-**Un exemple d'hallucination en mode `before`, T02 (vérifié)** : à la question *« Que disent les fans du duo de jeunes ailiers évoqué dans les threads playoffs ? »*, le système en mode texte seul répond en citant **Anthony Edwards et Jaden McDaniels (Wolves)**, alors que le duo réellement évoqué dans le thread indexé est **Paolo Banchero et Franz Wagner (Orlando Magic)**. `context_recall = 0.0` : le retrieval n'a jamais récupéré le bon chunk, noyé parmi des chunks d'un autre thread (débat statistique sur Reggie Miller) sans rapport avec la question. Exemple probant des limites du prototype texte seul, à conserver pour la soutenance.
+**Un exemple d'hallucination en mode `before`, T02** : à la question *« Que disent les fans du duo de jeunes ailiers évoqué dans les threads playoffs ? »*, le système en mode texte seul répond en citant **Anthony Edwards et Jaden McDaniels (Wolves)**, alors que le duo réellement évoqué dans le thread indexé est **Paolo Banchero et Franz Wagner (Orlando Magic)**. `context_recall = 0.0` : le retrieval n'a jamais récupéré le bon chunk, noyé parmi des chunks d'un autre thread (débat statistique sur Reggie Miller) sans rapport avec la question. Exemple probant des limites du prototype texte seul, à conserver pour la soutenance.
 
-**Un biais de retrieval qui persiste même avec le SQL Tool, T11 (vérifié)** : sur la question mixte *« Le joueur qui impressionne le plus les fans en playoffs a-t-il aussi les meilleures stats à 3 points ? »*, la recherche vectorielle ne récupère que des chunks du débat "Reggie Miller GOAT", sans lien avec la question. La réponse générée identifie donc à tort **Reggie Miller** comme le joueur qui impressionne le plus les fans, et admet ne pas avoir les stats à 3 points en playoffs. `context_precision = 0.0` et `context_recall = 0.0` : ajouter le SQL Tool n'aide pas si la recherche textuelle en amont ramène le mauvais contexte — la qualité du retrieval reste un facteur limitant pour les questions mixtes.
+**Un biais de retrieval qui persiste même avec le SQL Tool, T11** : sur la question mixte *« Le joueur qui impressionne le plus les fans en playoffs a-t-il aussi les meilleures stats à 3 points ? »*, la recherche vectorielle ne récupère que des chunks du débat "Reggie Miller GOAT", sans lien avec la question. La réponse générée identifie donc à tort **Reggie Miller** comme le joueur qui impressionne le plus les fans, et admet ne pas avoir les stats à 3 points en playoffs. `context_precision = 0.0` et `context_recall = 0.0` : ajouter le SQL Tool n'aide pas si la recherche textuelle en amont ramène le mauvais contexte — la qualité du retrieval reste un facteur limitant pour les questions mixtes.
 
-**Une hallucination du SQL Tool corrigée, T06 (vérifiée sur le run régénéré du 17/08/2026)** : la question *« Combien de points au total un joueur donné a-t-il marqués cette saison régulière ? »* ne nomme aucun joueur. Le générateur SQL produisait `WHERE player_name = 'LeBron James'` de sa propre initiative (réponse : *« Le total de points marqués par LeBron James cette saison régulière est de 1708. »*). **Corrigé** : `utils/sql_tool.py::_uses_only_values_from_question` rejette désormais toute requête générée dont un littéral texte (nom de joueur, équipe...) ne partage aucun mot avec la question d'origine. Sur le run régénéré, la réponse est désormais : *« La question posée ne fournit pas le nom du joueur dont vous souhaitez connaître le total de points marqués en saison régulière. Veuillez préciser le nom du joueur pour que je puisse répondre avec précision. »* — comportement correct.
+**Le garde-fou anti-hallucination de valeur, T06** : la question *« Combien de points au total un joueur donné a-t-il marqués cette saison régulière ? »* ne nomme aucun joueur. `utils/sql_tool.py::_uses_only_values_from_question` rejette toute requête générée dont un littéral texte (nom de joueur, équipe...) ne partage aucun mot avec la question d'origine — le SQL Tool ne peut donc pas inventer de sa propre initiative un `WHERE player_name = '...'`. La réponse du système est : *« La question posée ne fournit pas le nom du joueur dont vous souhaitez connaître le total de points marqués en saison régulière. Veuillez préciser le nom du joueur pour que je puisse répondre avec précision. »* — comportement correct.
 
-Effet secondaire contre-intuitif sur les scores : `faithfulness` passe de 1,0 (ancienne réponse fautive mais fidèle à un mauvais contexte SQL) à 0,75, et `answer_relevancy`/`context_recall` tombent à 0,0 (une demande de clarification ne "répond" à rien de mesurable pour RAGAS). Même schéma que T08/T09 : le comportement métier s'améliore, la métrique RAGAS le pénalise. C'est ce qui explique que l'écart de `faithfulness` avec le mode `before` se creuse légèrement après cette correction (voir 4.1) — un signal à interpréter avec la même prudence que pour T08/T09, pas comme une régression.
+Effet contre-intuitif sur les scores : cette demande de clarification obtient `faithfulness = 0.75` et `answer_relevancy`/`context_recall = 0.0` (une demande de clarification ne "répond" à rien de mesurable pour RAGAS). Même schéma que T08/T09 ci-dessous : le comportement métier est correct, la métrique RAGAS le pénalise — un signal à interpréter avec prudence, pas comme un défaut du système.
 
-**`faithfulness` s'améliore mais reste imparfait sur les réponses chiffrées, T07 (vérifié, run régénéré)** : la réponse *« La moyenne de rebonds par match, toutes équipes confondues, est de 3.6. »* — exacte et directement issue du résultat SQL fourni en contexte — obtenait `faithfulness = 0.0` sur le run précédent ; elle obtient `faithfulness = 0.5` sur le run régénéré (même réponse, même contexte : la variance vient du juge LLM, non déterministe malgré `temperature=0.0`). Le correctif du prompt (3.3, point 5) aide donc mais ne stabilise pas complètement la métrique sur ce type de réponse — à traiter comme une limite de mesure plutôt qu'un signal fiable sur ce cas précis.
+**`faithfulness` reste imparfait sur les réponses chiffrées courtes, T07** : la réponse *« La moyenne de rebonds par match, toutes équipes confondues, est de 3.6. »* — exacte et directement issue du résultat SQL fourni en contexte — obtient un score `faithfulness` variable d'une exécution à l'autre (la variance vient du juge LLM, non déterministe malgré `temperature=0.0`) : une limite de mesure à traiter comme telle plutôt qu'un signal fiable sur ce cas précis.
 
-**Les refus `NO_DATA` sont corrects mais mal notés par RAGAS, T08 et T09 (confirmé sur le run régénéré)** : sur ces deux cas volontairement irréalisables, le système répond correctement et clairement que la donnée n'est pas disponible (ex. T08 : *« La donnée n'est pas disponible dans la base actuelle, car les statistiques ne sont fournies qu'à l'échelle de la saison entière et non par match. »*), conformément au comportement attendu, et ce comportement est stable entre les deux runs. `faithfulness = 0.0` et `answer_relevancy = 0.0` dans les deux cas : la métrique RAGAS peine à évaluer une réponse de refus, qui ne "cite" pas le contexte texte fourni. Le comportement métier est correct ; c'est la métrique qui n'est pas adaptée à ce type de réponse — point à documenter comme limite méthodologique plutôt qu'à corriger dans le code.
+**Les refus `NO_DATA` sont corrects mais mal notés par RAGAS, T08 et T09** : sur ces deux cas volontairement irréalisables, le système répond correctement et clairement que la donnée n'est pas disponible (ex. T08 : *« La donnée n'est pas disponible dans la base actuelle, car les statistiques ne sont fournies qu'à l'échelle de la saison entière et non par match. »*), conformément au comportement attendu. `faithfulness = 0.0` et `answer_relevancy = 0.0` dans les deux cas : la métrique RAGAS peine à évaluer une réponse de refus, qui ne "cite" pas le contexte texte fourni. Le comportement métier est correct ; c'est la métrique qui n'est pas adaptée à ce type de réponse — point à documenter comme limite méthodologique plutôt qu'à corriger dans le code.
 
-**Une anomalie de données révélée par le SQL Tool, T10 — corrigée et vérifiée après régénération de la base** : sur le run initial, la requête *« Quels sont les 3 meilleurs passeurs en moyenne par match... »* (`ORDER BY ast_per_game DESC LIMIT 3`) renvoyait **trois fois la même ligne : Trae Young, 11,6 passes**, au lieu de 3 joueurs distincts — `player_season_stats` contenait alors 1707 lignes pour 569 joueurs réels (× 3, bug d'ingestion non idempotente, voir section 2). Après correction de `load_excel_to_db.py` (purge avant réinsertion) et rechargement de la base (569 lignes), **le run régénéré du 17/08/2026 confirme la correction** : la même requête renvoie désormais 3 joueurs distincts — *« Trae Young avec 11,6 passes... Nikola Jokić à 10,2... Tyrese Haliburton avec 9,2 »* — avec `faithfulness = 1.0` et `context_recall = 1.0`. Cas clos.
-
-### 4.3 Suivi des runs intermédiaires
-
-L'évaluation a été exécutée plusieurs fois pendant le développement ; les runs intermédiaires ci-dessous (non conservés en CSV) illustrent la tendance observée avant les derniers correctifs :
-
-| Run | faithfulness | answer_relevancy | context_precision | context_recall |
-|---|---|---|---|---|
-| Before (intermédiaire, n=11, T08 absent) | 0,796 | 0,301 | 0,271 | 0,385 |
-| Before (intermédiaire, n=11, T08 absent) | 0,817 | 0,327 | 0,358 | 0,385 |
-| After (intermédiaire, n=12, base dupliquée x3) | 0,725 | 0,496 | 0,409 | 0,615 |
-| After (intermédiaire, n=12, base dupliquée x3) | 0,648 | 0,626 | 0,466 | 0,542 |
-| Before (intermédiaire, n=13, 2 métriques en échec juge : answer_relevancy/T03, faithfulness/T04) | 0,850 | 0,317 | 0,366 | 0,385 |
-| **Before (final, CSV conservé, n=13/13 sur les 4 métriques)** | **0,867** | **0,295** | **0,274** | **0,346** |
-| After (intermédiaire, n=13/13, base corrigée, avant fix T06) | 0,755 | 0,649 | 0,351 | 0,615 |
-| After (pré-migration, SDK Mistral direct + SQLite, 17/08/2026) | 0,673 | 0,581 | 0,403 | 0,577 |
-| **After (final, CSV conservé, post-migration LangChain + PostgreSQL, 24/08/2026)** | **0,757** | **0,535** | **0,366** | **0,615** |
-
-Le sens des écarts (`answer_relevancy`, `context_precision` et `context_recall` toujours nettement en hausse en mode `after`) reste stable d'un run à l'autre, ce qui donne confiance dans la conclusion générale malgré la variance sur les valeurs absolues et la taille d'échantillon réduite (11-13 questions selon le run). `faithfulness`, à l'inverse, baisse un peu plus après la correction du bug T06 (voir 4.2) : corriger une hallucination applicative fait mécaniquement reculer ce score RAGAS précis, la métrique pénalisant les réponses de clarification/refus. Un échantillon plus large et une couverture strictement identique entre `before` et `after` réduiraient la variance résiduelle et sont recommandés pour une évaluation en production.
+**Un classement fiable grâce à une ingestion idempotente, T10** : la requête *« Quels sont les 3 meilleurs passeurs en moyenne par match... »* (`ORDER BY ast_per_game DESC LIMIT 3`) renvoie 3 joueurs distincts (*« Trae Young avec 11,6 passes... Nikola Jokić à 10,2... Tyrese Haliburton avec 9,2 »*), avec `faithfulness = 1.0` et `context_recall = 1.0`. Ce résultat repose sur `load_excel_to_db.py`, qui purge la table `player_season_stats` avant chaque réinsertion : sans cette purge (table à clé auto-incrémentée, sans contrainte d'unicité métier), relancer l'ingestion plusieurs fois dupliquerait les lignes et fausserait tout classement agrégé.
 
 ## 5. Limites
 
@@ -157,11 +147,11 @@ Le SQL Tool est conçu pour détecter ce cas et répondre `NO_DATA` plutôt que 
 
 ### 5.2 Limites de l'évaluation RAGAS
 
-- Le juge Mistral, bien que fonctionnel après corrections, n'est pas le cas d'usage d'origine de RAGAS (conçu autour d'OpenAI) : certains comportements par défaut (multi-complétions) nécessitent des adaptations (voir 3.3).
+- Le juge Mistral, bien que fonctionnel après adaptation, n'est pas le cas d'usage d'origine de RAGAS (conçu autour d'OpenAI) : certains comportements par défaut (multi-complétions) nécessitent des adaptations (voir 3.3).
 - `answer_relevancy` reste sensible à la longueur/forme des réponses (pénalise les réponses courtes et factuelles par rapport à des réponses longues et discursives), un biais à interpréter avec prudence plutôt qu'un signal de qualité brut.
 - `faithfulness`, sur des réponses purement chiffrées, dépend de la formulation exacte de la réponse (phrase complète vs valeur isolée) — un point de fragilité de la métrique plus que du système évalué.
 - Aucune métrique ne mesure ici la latence ni le coût par requête, deux dimensions pourtant pertinentes pour un usage en production (à envisager pour un futur monitoring).
-- Le juge RAGAS/Mistral peut échouer à noter une métrique sur une question précise (`NaN` plutôt qu'une erreur bloquante) : observé sur le run `before` du 17/08/2026 (`answer_relevancy` sur T03, `faithfulness` sur T04). `evaluate_ragas.py` ne le signale pas explicitement dans les logs (le `.mean()` pandas les ignore silencieusement) — une vérification manuelle du nombre de valeurs non-nulles par colonne est nécessaire avant de publier des moyennes, sans quoi la taille d'échantillon réelle par métrique reste invisible.
+- Le juge RAGAS/Mistral peut occasionnellement échouer à noter une métrique sur une question précise (`NaN` plutôt qu'une erreur bloquante), sans que `evaluate_ragas.py` ne le signale explicitement dans les logs (le `.mean()` pandas les ignore silencieusement) — une vérification manuelle du nombre de valeurs non-nulles par colonne est nécessaire avant de publier des moyennes, sans quoi la taille d'échantillon réelle par métrique reste invisible.
 
 ### 5.3 Limites de l'échantillon de test
 
@@ -181,18 +171,10 @@ Le SQL Tool est conçu pour détecter ce cas et répondre `NO_DATA` plutôt que 
 
 ## 7. Conclusion et recommandations
 
-L'ajout du SQL Tool améliore mesurablement le système sur la comparaison finale, strictement appariée à 13 cas et sans valeur manquante des deux côtés (answer_relevancy +0,286, context_recall +0,231, context_precision +0,129), confirmant l'intérêt de l'enrichissement chiffré pour répondre aux besoins métier de Sarah. `faithfulness` recule (-0,194, écart réel, mesuré sur échantillon complet après correction du bug T06). Cet écart a été investigué cas par cas (section 4.2) et attribué principalement à une limite de la métrique RAGAS sur les réponses de refus/clarification (`NO_DATA`, T08/T09, et désormais T06 après sa correction) et sur les réponses chiffrées courtes (T07) : le comportement métier s'améliore à chaque fois, mais RAGAS note ces réponses plus sévèrement qu'une réponse chiffrée fautive mais bien formulée — un artefact de mesure documenté et récurrent sur ce projet, pas une dégradation réelle de la qualité perçue par l'utilisateur.
-
-**État des corrections apportées pendant cette mission** :
-- ✅ Base `player_season_stats` dédupliquée (`load_excel_to_db.py` rendu idempotent) — T10 confirmé corrigé.
-- ✅ Routage Pydantic AI réparé (`result_type`→`output_type`) — le routeur LLM s'exécute désormais réellement au lieu de toujours retomber sur l'heuristique.
-- ✅ Retry réseau ajouté sur les appels Mistral — le script ne perd plus tout un run pour une erreur transitoire (503/429).
-- ✅ Retry automatique du juge RAGAS sur les questions en échec de notation (`NaN`), ajouté dans `evaluate_ragas.py`.
-- ✅ Garde-fou anti-hallucination de valeur ajouté au SQL Tool (`_uses_only_values_from_question`) — T06 corrigé, testé unitairement, et vérifié sur un run RAGAS régénéré.
-- ✅ `evaluate_ragas.py` rejoué en modes `before` et `after` (deux fois pour `after`, avant et après le fix T06) : comparaison finale strictement appariée sur les 13 cas et les 4 métriques, sans valeur manquante.
+L'ajout du SQL Tool améliore mesurablement le système sur la comparaison finale, strictement appariée à 13 cas et sans valeur manquante des deux côtés (answer_relevancy +0,240, context_recall +0,269, context_precision +0,092), confirmant l'intérêt de l'enrichissement chiffré pour répondre aux besoins métier de Sarah. `faithfulness` recule (-0,110). Cet écart a été investigué cas par cas (section 4.2) et attribué principalement à une limite de la métrique RAGAS sur les réponses de refus/clarification (`NO_DATA`, T06, T08/T09) et sur les réponses chiffrées courtes (T07) : le comportement métier est correct à chaque fois, mais RAGAS note ces réponses plus sévèrement qu'une réponse chiffrée fautive mais bien formulée — un artefact de mesure documenté et récurrent sur ce projet, pas une dégradation réelle de la qualité perçue par l'utilisateur.
 
 **Recommandations pour la suite** :
-1. Ajouter une métrique/vérification dédiée à la détection correcte des refus et clarifications, en complément de RAGAS, pour ne plus être aveugle sur ce comportement pourtant souhaité (T06, T08, T09 s'améliorent tous en pratique sans que `faithfulness`/`answer_relevancy` ne le reflète).
+1. Ajouter une métrique/vérification dédiée à la détection correcte des refus et clarifications, en complément de RAGAS, pour ne plus être aveugle sur ce comportement pourtant souhaité (T06, T08, T09 sont corrects en pratique sans que `faithfulness`/`answer_relevancy` ne le reflète).
 2. Reformuler le cas de test T06 avec un nom de joueur explicite, pour disposer aussi d'un cas nominal vérifiant le bon fonctionnement du SQL Tool sur une question non ambiguë.
 3. Élargir le jeu de test au-delà de 13 questions pour fiabiliser les scores absolus.
 4. Obtenir de Sarah un fichier à granularité match par match si les cas d'usage "5 derniers matchs" / "domicile-extérieur" restent prioritaires.
@@ -205,7 +187,7 @@ Deux composants supplémentaires du système, implémentés et testés au même 
 
 ### 8.1 Fallback OCR (Nanonets) pour les rapports scannés
 
-**Contexte** : le pipeline d'ingestion (`utils/data_loader.py`) ne traitait, avant cette évolution, que des PDF avec une couche de texte exploitable (extraction `PyPDF2`). Un PDF scanné (image pure, sans texte sélectionnable) — cas réaliste pour des rapports d'analyse — n'était pas géré et produisait un contenu quasi vide, silencieusement.
+**Contexte** : le pipeline d'ingestion (`utils/data_loader.py`) ne traite par défaut que des PDF avec une couche de texte exploitable (extraction `PyPDF2`). Un PDF scanné (image pure, sans texte sélectionnable) — cas réaliste pour des rapports d'analyse — nécessite un traitement dédié.
 
 **Implémentation** : un fallback OCR via l'API Nanonets (`extract_text_with_ocr_nanonets`) se déclenche automatiquement lorsque l'extraction standard renvoie moins de 100 caractères. Sans clé `NANONETS_API_KEY` configurée, ce fallback est désactivé proprement (pas d'exception, pas de blocage de l'ingestion) — testé unitairement dans `tests/test_guardrails.py::TestOcrFallbackGracefulDegradation`.
 
@@ -216,72 +198,17 @@ Deux composants supplémentaires du système, implémentés et testés au même 
 | Avant (PyPDF2 seul) | 0 | 0,0000 |
 | Après (+ OCR Nanonets) | 413 | 0,9757 |
 
-Résultat mesuré le 21/08/2026 (`reports/ocr_before_after.csv`) : le cas « avant » confirme que l'extraction standard échoue bien totalement sur un document image pur (0 caractère, comme attendu pour un vrai rapport scanné). Le cas « après », avec le fallback OCR Nanonets actif, restitue **413 caractères avec une similarité de 0,9757** au texte de référence — une amélioration de **+0,9757**, qui démontre concrètement l'apport du fallback OCR sur un cas représentatif d'un rapport scanné, sans dépendre d'un vrai document indisponible dans ce projet.
+Le cas « avant » confirme que l'extraction standard échoue bien totalement sur un document image pur (0 caractère, comme attendu pour un vrai rapport scanné). Le cas « après », avec le fallback OCR Nanonets actif, restitue **413 caractères avec une similarité de 0,9757** au texte de référence — une amélioration de **+0,9757**, qui démontre concrètement l'apport du fallback OCR sur un cas représentatif d'un rapport scanné, sans dépendre d'un vrai document indisponible dans ce projet.
 
 ### 8.2 PlotTool : génération dynamique de graphiques
 
-**Implémentation** : `utils/plot_tool.py` génère un graphique (barres, courbe ou camembert) lorsqu'une visualisation est explicitement demandée (`route.needs_plot`, ajouté au routeur `QueryRoute`).
+**Implémentation** : `utils/plot_tool.py` génère un graphique (barres, courbe ou camembert) lorsqu'une visualisation est explicitement demandée (`route.needs_plot`, porté par le routeur `QueryRoute`). Un invariant du modèle (`@model_validator` sur `QueryRoute`) garantit que `needs_plot=True` implique toujours `needs_sql=True`, quelle que soit la source de la décision (LLM ou heuristique de repli) — ce qui garantit que le contexte SQL utilisé pour rédiger la réponse textuelle est toujours cohérent avec les données affichées dans le graphique.
 
-**Choix de conception** : contrairement au SQL Tool (section 9.1, qui utilise LangChain pour la génération NL → SQL), le PlotTool n'appelle pas de chaîne LangChain — et ce délibérément, pour ne pas ouvrir un second point d'hallucination de données à côté du SQL Tool déjà sécurisé. Le PlotTool a été conçu pour **réutiliser exclusivement les lignes déjà validées et retournées par le SQL Tool** : aucune valeur numérique n'est générée par un nouvel appel LLM. Seul le *type* de graphique est déterminé, par une heuristique de mots-clés sans appel API (même principe que le fallback heuristique du routeur, `utils/router.py::_heuristic_route`) — un choix de fiabilité délibéré, en particulier avant une démonstration en direct.
+**Choix de conception** : contrairement au SQL Tool (section 2.1, qui utilise LangChain pour la génération NL → SQL), le PlotTool n'appelle pas de chaîne LangChain — et ce délibérément, pour ne pas ouvrir un second point d'hallucination de données à côté du SQL Tool déjà sécurisé. Le PlotTool réutilise exclusivement les lignes déjà validées et retournées par le SQL Tool : aucune valeur numérique n'est générée par un nouvel appel LLM. Seul le *type* de graphique est déterminé, par une heuristique de mots-clés sans appel API (même principe que le fallback heuristique du routeur, `utils/router.py::_heuristic_route`) — un choix de fiabilité délibéré, en particulier avant une démonstration en direct.
 
-Testé unitairement (`tests/test_guardrails.py::TestPlotToolChartType`, `TestPlotToolNoDataFabrication`) : choix du type de graphique, extraction des colonnes label/valeur, et surtout — le garde-fou central — retour d'une erreur explicite plutôt qu'un graphique fabriqué lorsque le SQL Tool n'a pas de donnée exploitable.
+**Détection robuste des colonnes numériques** : le SQL Tool s'exécute aussi bien sur SQLite que sur PostgreSQL (section 2.2). Les deux moteurs ne renvoient pas le même type Python pour une colonne calculée (ex. `ROUND(...)`) : `float` sur SQLite, `decimal.Decimal` sur PostgreSQL (via `psycopg2`). Le PlotTool reconnaît les deux types indifféremment (`utils/plot_tool.py::_extract_labels_and_values`), afin que la génération de graphique reste fiable quel que soit le moteur de base de données configuré.
 
-
-**Correctif** : ajout d'un `@model_validator` sur `QueryRoute` (`utils/router.py`) forçant `needs_sql=True` dès que `needs_plot=True`, comme invariant du modèle plutôt que comme simple consigne de prompt — donc garanti quelle que soit la source de la décision (LLM ou heuristique de repli). Un second test manuel sur la même question a confirmé la cohérence texte/graphique après correction ; 2 tests de non-régression ajoutés (`TestQueryRoutePlotRequiresSql`), portant le total à 54 tests. Un fix similaire a également été apporté au prompt de génération (`format_plot_context` dans `MistralChat.py`) : sans cette information, le LLM ignorait qu'un graphique serait affiché sous sa réponse et affirmait à tort ne pas pouvoir en produire un.
-
-## 9. Corrections apportées suite à la relecture du mentor (23/08/2026)
-
-Une relecture du dépôt et des diapositives par Sylvain (mentor) a identifié cinq points à corriger avant la soutenance. Chacun est traité ci-dessous, avec la justification technique correspondante.
-
-### 9.1 SQL Tool : migration vers LangChain
-
-**Retour** : le SQL Tool utilisait un appel direct au SDK Mistral pour la génération NL → SQL, sans passer par LangChain, alors que le projet demande explicitement un Tool SQL LangChain.
-
-**Correction** : `utils/sql_tool.py::generate_sql` utilise désormais en priorité `create_sql_query_chain` (LangChain) associé à `SQLDatabase` (introspection réelle du schéma PostgreSQL via SQLAlchemy) et `ChatMistralAI` (`langchain-mistralai`, déjà une dépendance du projet pour le juge RAGAS). Un repli automatique et transparent sur l'appel direct au SDK Mistral (`generate_sql_direct_mistral`, l'implémentation d'origine) est conservé en cas d'échec d'initialisation ou d'exécution de la chaîne LangChain — même philosophie de dégradation gracieuse que le routeur heuristique (section 2) et le fallback OCR (section 8.1).
-
-**Choix architectural assumé** : LangChain est utilisé uniquement pour la *génération* de la requête SQL, jamais pour son *exécution*. `create_sql_query_chain` renvoie une chaîne de caractères SQL sans l'exécuter — contrairement à `create_sql_agent`, qui exécute lui-même la requête dans sa propre boucle d'agent. Utiliser `create_sql_agent` aurait rendu beaucoup plus difficile l'application des garde-fous de sécurité existants et déjà validés (`_is_safe_select`, `_uses_only_values_from_question`, `_enforce_limit`, détection `NO_DATA`) : ceux-ci restent appliqués tels quels, en post-traitement, entre la génération LangChain et l'exécution SQLAlchemy — aucun garde-fou n'a été affaibli ou contourné par cette migration.
-
-Testé unitairement (`tests/test_guardrails.py::TestLangchainSqlGenerationPriority`, `TestLangchainSqlPromptTemplate`) : priorité de la voie LangChain, repli transparent en cas d'échec, présence des variables de prompt exigées par `create_sql_query_chain`, préservation des règles métier (cumuls saison, convention `NO_DATA`) dans le nouveau prompt.
-
-### 9.2 Base de données : migration vers PostgreSQL
-
-**Retour** : le projet et les diapositives présentaient SQLite comme base de données, alors que PostgreSQL est la base attendue.
-
-**Correction** : `SQL_DATABASE_URL` (dans `utils/config.py`) a désormais pour valeur par défaut une URL PostgreSQL (`postgresql+psycopg2://...`), et `psycopg2-binary` est décommenté dans `requirements.txt`. Le schéma relationnel (`utils/db.py`) était déjà conçu pour être agnostique du dialecte SQL (SQLAlchemy) : **aucune modification du code ORM n'a été nécessaire**, seule la configuration a changé. SQLite reste disponible en dépannage (démo hors-ligne sans serveur disponible) en changeant uniquement `DATABASE_URL` dans `.env`, sans toucher au code.
-
-**Validation** : la migration a été testée de bout en bout (ingestion complète de `regular_NBA.xlsx` — 30 équipes, 569 joueurs, 30 résumés d'équipe — puis requêtage) sur une instance PostgreSQL réelle avant d'être considérée comme fonctionnelle, et non uniquement sur la base d'une lecture du code.
-
-### 9.3 Résultats RAGAS versionnés dans le dépôt
-
-**Retour** : les CSV de résultats RAGAS annoncés dans `reports/` étaient ignorés par Git (`.gitignore`), donc absents du dépôt malgré leur mention dans le rapport.
-
-**Correction** : `.gitignore` exclut toujours les CSV intermédiaires de `reports/` par défaut (résultats de développement, non pertinents une fois le rapport final rédigé), à l'exception explicite de `reports/eval_before.csv` et `reports/eval_after.csv` — les résultats finaux before/after cités en section 4, désormais versionnés comme preuve de l'évaluation.
-
-### 9.4 Seuils RAGAS explicites
-
-**Retour** : les résultats RAGAS étaient comparés avant/après, mais sans seuil ou objectif cible défini pour chaque métrique — point explicitement attendu dans les critères d'évaluation.
-
-**Correction** : voir la section 4 (Résultats), qui définit désormais un seuil cible par métrique (faithfulness, answer_relevancy, context_precision, context_recall) et positionne explicitement les résultats mesurés par rapport à ces seuils, plutôt qu'une simple comparaison relative avant/après.
-
-### 9.5 Compatibilité Python 3.12
-
-**Retour** : sous Python 3.12, `pytest` ne démarre pas avec le `requirements.txt` existant (dépendance manquante liée à Logfire/OpenTelemetry).
-
-**Correction** : ajout de `importlib-metadata>=6.0` dans `requirements.txt` (section Observabilité), à côté de `logfire==0.51.0`.
-
-### 9.6 Régression PlotTool découverte lors du test manuel post-migration (24/08/2026)
-
-Après la migration PostgreSQL (9.2), un test manuel en Streamlit a révélé un nouveau bug : pour toute question demandant un graphique basé sur une colonne calculée (ex. `ROUND(pts_total * 1.0 / games_played, 1) AS pts_per_game`), le PlotTool échouait silencieusement en affirmant « aucune donnée numérique exploitable », alors même que la réponse textuelle listait juste après ces mêmes valeurs numériques — signal évident d'incohérence.
-
-**Cause** : `psycopg2` (driver PostgreSQL) renvoie les colonnes `NUMERIC`/`DECIMAL` — notamment le résultat de `ROUND(...)` — comme des objets Python `decimal.Decimal`, alors que `sqlite3` renvoie un `float` natif pour la même requête. Le test de détection de colonne numérique dans `utils/plot_tool.py::_extract_labels_and_values` (`isinstance(sample, (int, float))`) ne reconnaissait donc plus aucune colonne numérique sur PostgreSQL, uniquement sur SQLite — une régression directement causée par la migration de base de données, invisible tant que les tests s'exécutaient sur SQLite.
-
-**Correction** : ajout de `decimal.Decimal` au test de type. Vérifié directement contre une vraie base PostgreSQL (mêmes valeurs que celles observées par Fatima en test manuel : Shai Gilgeous-Alexander 32,7 pts/match, etc.), et couvert par un nouveau test de non-régression (`tests/test_guardrails.py::TestPlotToolNoDataFabrication::test_extracts_numeric_column_when_values_are_decimal`), portant le total à 61 tests.
-
-Ce cas illustre concrètement l'intérêt de tester manuellement après une migration d'infrastructure, même quand tous les tests unitaires (qui utilisaient des données Python simulées, pas une vraie connexion PostgreSQL) restaient au vert — une limite méthodologique à noter : les tests unitaires actuels ne couvrent pas les types de données réellement renvoyés par le driver PostgreSQL, seulement des structures Python construites à la main.
-
-### 9.7 Diapositive d'architecture et capture Logfire
-
-La diapositive d'architecture a été mise à jour pour refléter LangChain (SQL Tool) et PostgreSQL (voir `Soutenance_SportSee_contenu_slides.md`). Une capture d'écran du tableau de bord Logfire, explicitement attendue pendant la soutenance, doit être ajoutée : voir la note dans les diapositives — cette capture doit être prise depuis le compte Logfire réel (démonstration en direct pendant la soutenance recommandée si le temps le permet, en complément ou à la place d'une capture statique).
+Testé unitairement (`tests/test_guardrails.py::TestPlotToolChartType`, `TestPlotToolNoDataFabrication`, `TestQueryRoutePlotRequiresSql`) : choix du type de graphique, extraction des colonnes label/valeur (y compris `decimal.Decimal`), cohérence texte/graphique garantie par l'invariant du modèle, et surtout — le garde-fou central — retour d'une erreur explicite plutôt qu'un graphique fabriqué lorsque le SQL Tool n'a pas de donnée exploitable.
 
 ## Annexe — Jeu de questions de test complet
 
