@@ -421,15 +421,14 @@ Quatre métriques sont calculées :
 
 Comparaison finale, strictement appariée sur les 13 cas de
 test et les 4 métriques, sans valeur manquante des deux côtés (run
-`after` régénéré après correction du garde-fou anti-hallucination du SQL
-Tool, voir point 6 ci-dessous) :
+`after` post-migration LangChain + PostgreSQL, 24/08/2026) :
 
   Métrique              Before --- texte seul   After --- routage + SQL   Évolution
   ------------------- ----------------------- ------------------------- -----------
-  Faithfulness                       **0,867**                     0,673       -0,194
-  Answer Relevancy                       0,295                 **0,581**   **+0,286**
-  Context Precision                      0,274                 **0,403**   **+0,129**
-  Context Recall                         0,346                 **0,577**   **+0,231**
+  Faithfulness                       **0,867**                     0,757       -0,110
+  Answer Relevancy                       0,295                 **0,535**   **+0,240**
+  Context Precision                      0,274                 **0,366**   **+0,092**
+  Context Recall                         0,346                 **0,615**   **+0,269**
 
 Détail complet des reproductions de run, des cas de figure et de
 l'analyse question par question : voir `Rapport_Evaluation_RAG.md`
@@ -441,16 +440,16 @@ L'ajout du routage et du SQL Tool améliore fortement la **pertinence des
 réponses**, le **rappel** et la **précision du contexte** :
 
 ``` text
-Answer Relevancy  : 0,295 → 0,581
-Context Recall    : 0,346 → 0,577
-Context Precision : 0,274 → 0,403
+Answer Relevancy  : 0,295 → 0,535
+Context Recall    : 0,346 → 0,615
+Context Precision : 0,274 → 0,366
 ```
 
 Le système enrichi récupère donc mieux les informations nécessaires,
 notamment pour les questions chiffrées pour lesquelles une recherche
 textuelle seule est insuffisante.
 
-La **Faithfulness** diminue en revanche (0,867 → 0,673). Cette baisse a
+La **Faithfulness** diminue en revanche (0,867 → 0,757). Cette baisse a
 été analysée cas par cas (voir `Rapport_Evaluation_RAG.md`, section 4.2)
 et s'explique presque entièrement par une limite du juge RAGAS sur les
 réponses de refus/clarification (`NO_DATA`, cas `T08`/`T09`, et
