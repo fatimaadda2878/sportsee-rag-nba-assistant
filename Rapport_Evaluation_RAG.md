@@ -49,7 +49,7 @@ Recherche vectorielle (FAISS)          SQL Tool (NL → SQL few-shot)
 
 **Sources de données** :
 - 4 threads Reddit r/nba (discussions sur les playoffs, sentiment des fans, débats statistiques) → indexés dans `inputs/`
-- `regular_NBA.xlsx` : statistiques agrégées de la saison régulière, 30 équipes et 569 lignes joueur/passage en équipe pour une exécution propre de l'ingestion (validé le 11/08/2026)
+- `regular_NBA.xlsx` : statistiques agrégées de la saison régulière, 30 équipes et 569 lignes joueur/passage en équipe pour une exécution propre de l'ingestion
 
 ## 3. Méthodologie d'évaluation
 
@@ -92,7 +92,7 @@ RAGAS s'appuie par défaut sur un LLM juge OpenAI. Ce projet n'utilisant que Mis
 
 ### 4.1 Tableau comparatif before / after
 
-`reports/eval_before.csv` et `reports/eval_after.csv` ont tous les deux été régénérés le 17/08/2026 sur les **13 cas de test au complet, avec un score sur les 4 métriques pour les 13 questions des deux côtés (13/13, sans NaN)**. C'est la première comparaison de ce rapport strictement appariée, aussi bien au niveau des questions que des métriques.
+`reports/eval_before.csv` et `reports/eval_after.csv` ont tous les deux été régénérés sur les **13 cas de test au complet, avec un score sur les 4 métriques pour les 13 questions des deux côtés (13/13, sans NaN)**. C'est la première comparaison de ce rapport strictement appariée, aussi bien au niveau des questions que des métriques.
 
 | Métrique | Before (n=13/13) | After (n=13/13) | Delta |
 |---|---|---|---|
@@ -160,8 +160,6 @@ Le SQL Tool est conçu pour détecter ce cas et répondre `NO_DATA` plutôt que 
 
 13 questions est un échantillon volontairement restreint pour un prototype, suffisant pour un premier audit avant/après mais insuffisant pour une évaluation statistiquement robuste en production. Il ne couvre pas non plus la robustesse à un changement de corpus (nouveaux threads Reddit) ou de modèle de génération — deux axes de sensibilité à anticiper (voir section 6).
 
-**Mise à jour du 17/08/2026** : `before` et `after` couvrent désormais tous les deux les 13 cas de test, sur les 4 métriques, sans valeur manquante (voir 4.1). Deux corrections y ont contribué : le retry réseau ajouté en 3.3 (point 7), qui a permis au run `before` d'aller au bout sans être interrompu par une erreur transitoire ; et un retry automatique ajouté dans `evaluate_ragas.py` qui relance le juge RAGAS uniquement sur les questions en échec de notation (`NaN`) plutôt que de laisser ces cellules vides. Un premier run `before` avait encore 2 cellules en `NaN` malgré le premier correctif (aléa ponctuel du juge, voir 5.2) ; un second run, avec le retry automatique en place, les a résolues. La comparaison de la section 4.1 est donc désormais strictement appariée, au niveau des questions et des métriques.
-
 ## 6. Choix techniques et sensibilité du système (éléments de discussion)
 
 **Pourquoi FAISS + embeddings Mistral plutôt qu'un autre retriever ?** Corpus de taille modeste (quelques threads Reddit), FAISS en local évite une dépendance à un service de vector store managé, cohérent avec un prototype. Le choix serait à revoir (retriever hybride BM25 + dense, reranking) si le corpus grossissait significativement.
@@ -221,7 +219,6 @@ Résultat mesuré le 21/08/2026 (`reports/ocr_before_after.csv`) : le cas « ava
 
 Testé unitairement (`tests/test_guardrails.py::TestPlotToolChartType`, `TestPlotToolNoDataFabrication`) : choix du type de graphique, extraction des colonnes label/valeur, et surtout — le garde-fou central — retour d'une erreur explicite plutôt qu'un graphique fabriqué lorsque le SQL Tool n'a pas de donnée exploitable.
 
-**Bug réel trouvé et corrigé pendant les tests manuels (21/08/2026)** : lors d'un test en conditions réelles sur l'application Streamlit, une question de type « montre un graphique du top 3 des marqueurs » a produit une réponse contradictoire — le graphique affichait les bonnes données, mais le texte affirmait que « les données ne contiennent pas ce classement » (avec même un exemple hypothétique inventé par le LLM, correctement présenté comme tel). Cause identifiée : le routeur LLM avait renvoyé `needs_plot=True` mais `needs_sql=False`, une combinaison incohérente jamais explicitement interdite. Comme `MistralChat.py` n'exécutait le SQL Tool que si `needs_sql=True`, le contexte chiffré manquait pour la génération du texte, alors que le PlotTool, lui, ré-exécutait le SQL Tool de son côté et affichait un graphique correct : un cas concret de désynchronisation entre deux composants consommant la même décision de routage.
 
 **Correctif** : ajout d'un `@model_validator` sur `QueryRoute` (`utils/router.py`) forçant `needs_sql=True` dès que `needs_plot=True`, comme invariant du modèle plutôt que comme simple consigne de prompt — donc garanti quelle que soit la source de la décision (LLM ou heuristique de repli). Un second test manuel sur la même question a confirmé la cohérence texte/graphique après correction ; 2 tests de non-régression ajoutés (`TestQueryRoutePlotRequiresSql`), portant le total à 54 tests. Un fix similaire a également été apporté au prompt de génération (`format_plot_context` dans `MistralChat.py`) : sans cette information, le LLM ignorait qu'un graphique serait affiché sous sa réponse et affirmait à tort ne pas pouvoir en produire un.
 
