@@ -420,12 +420,12 @@ Quatre métriques sont calculées :
 Comparaison finale, strictement appariée sur les 13 cas de
 test et les 4 métriques, sans valeur manquante des deux côtés :
 
-  Métrique              Before --- texte seul   After --- routage + SQL   Évolution
-  ------------------- ----------------------- ------------------------- -----------
-  Faithfulness                       **0,867**                     0,757       -0,110
-  Answer Relevancy                       0,295                 **0,535**   **+0,240**
-  Context Precision                      0,274                 **0,366**   **+0,092**
-  Context Recall                         0,346                 **0,615**   **+0,269**
+| Métrique | Before — texte seul | After — routage + SQL | Évolution |
+|---|---|---|---|
+| Faithfulness | **0,867** | 0,757 | -0,110 |
+| Answer Relevancy | 0,295 | **0,535** | **+0,240** |
+| Context Precision | 0,274 | **0,366** | **+0,092** |
+| Context Recall | 0,346 | **0,615** | **+0,269** |
 
 Détail complet des reproductions de run, des cas de figure et de
 l'analyse question par question : voir `Rapport_Evaluation_RAG.md`
