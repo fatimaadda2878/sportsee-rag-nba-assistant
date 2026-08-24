@@ -738,17 +738,3 @@ méthodologiques dans l'évaluation automatique des réponses numériques.
 ## 👩‍💻 Auteur
 
 **Fatima Adda**
-
-Projet réalisé dans le cadre d'un travail sur les systèmes RAG, les
-agents IA et l'exploitation conjointe de données textuelles et
-structurées.
-
-------------------------------------------------------------------------
-
-## 📌 Statut
-
-**Prototype fonctionnel --- projet pédagogique / portfolio Data & IA**
-
-Le système est opérationnel sur la granularité actuellement disponible
-dans les données et privilégie explicitement l'absence de réponse à
-l'invention d'une information non disponible.
