@@ -58,3 +58,7 @@ reports/*.csv
 
 # Jupyter Notebook
 .ipynb_checkpoints
+
+# Diapositives de soutenance : fichier de présentation, pas du code du
+# projet - ne doit pas être publié sur le dépôt GitHub (demande de Fatima).
+*.pptx
