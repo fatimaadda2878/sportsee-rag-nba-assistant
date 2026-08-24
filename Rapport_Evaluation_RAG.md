@@ -266,7 +266,17 @@ Testé unitairement (`tests/test_guardrails.py::TestLangchainSqlGenerationPriori
 
 **Correction** : ajout de `importlib-metadata>=6.0` dans `requirements.txt` (section Observabilité), à côté de `logfire==0.51.0`.
 
-### 9.6 Diapositive d'architecture et capture Logfire
+### 9.6 Régression PlotTool découverte lors du test manuel post-migration (24/08/2026)
+
+Après la migration PostgreSQL (9.2), un test manuel en Streamlit a révélé un nouveau bug : pour toute question demandant un graphique basé sur une colonne calculée (ex. `ROUND(pts_total * 1.0 / games_played, 1) AS pts_per_game`), le PlotTool échouait silencieusement en affirmant « aucune donnée numérique exploitable », alors même que la réponse textuelle listait juste après ces mêmes valeurs numériques — signal évident d'incohérence.
+
+**Cause** : `psycopg2` (driver PostgreSQL) renvoie les colonnes `NUMERIC`/`DECIMAL` — notamment le résultat de `ROUND(...)` — comme des objets Python `decimal.Decimal`, alors que `sqlite3` renvoie un `float` natif pour la même requête. Le test de détection de colonne numérique dans `utils/plot_tool.py::_extract_labels_and_values` (`isinstance(sample, (int, float))`) ne reconnaissait donc plus aucune colonne numérique sur PostgreSQL, uniquement sur SQLite — une régression directement causée par la migration de base de données, invisible tant que les tests s'exécutaient sur SQLite.
+
+**Correction** : ajout de `decimal.Decimal` au test de type. Vérifié directement contre une vraie base PostgreSQL (mêmes valeurs que celles observées par Fatima en test manuel : Shai Gilgeous-Alexander 32,7 pts/match, etc.), et couvert par un nouveau test de non-régression (`tests/test_guardrails.py::TestPlotToolNoDataFabrication::test_extracts_numeric_column_when_values_are_decimal`), portant le total à 61 tests.
+
+Ce cas illustre concrètement l'intérêt de tester manuellement après une migration d'infrastructure, même quand tous les tests unitaires (qui utilisaient des données Python simulées, pas une vraie connexion PostgreSQL) restaient au vert — une limite méthodologique à noter : les tests unitaires actuels ne couvrent pas les types de données réellement renvoyés par le driver PostgreSQL, seulement des structures Python construites à la main.
+
+### 9.7 Diapositive d'architecture et capture Logfire
 
 La diapositive d'architecture a été mise à jour pour refléter LangChain (SQL Tool) et PostgreSQL (voir `Soutenance_SportSee_contenu_slides.md`). Une capture d'écran du tableau de bord Logfire, explicitement attendue pendant la soutenance, doit être ajoutée : voir la note dans les diapositives — cette capture doit être prise depuis le compte Logfire réel (démonstration en direct pendant la soutenance recommandée si le temps le permet, en complément ou à la place d'une capture statique).
 

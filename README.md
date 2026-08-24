@@ -457,9 +457,9 @@ réponses de refus/clarification (`NO_DATA`, cas `T08`/`T09`, et
 désormais `T06` une fois corrigé) et sur certaines réponses chiffrées
 courtes (`T07`) : RAGAS note plus sévèrement une réponse de clarification
 correcte qu'une réponse chiffrée fautive mais bien formulée. Corriger le
-bug applicatif de `T06` (voir "Bugs identifiés grâce à l'observabilité",
-point 6) a d'ailleurs *fait baisser* ce score, un effet contre-intuitif
-mais cohérent avec ce biais de mesure.
+bug applicatif de `T06` (voir `Rapport_Evaluation_RAG.md`, section 4.2) a
+d'ailleurs *fait baisser* ce score, un effet contre-intuitif mais cohérent
+avec ce biais de mesure.
 
 ------------------------------------------------------------------------
 
@@ -677,10 +677,11 @@ Lancer les tests avec :
 pytest tests/
 ```
 
-60 tests unitaires (`tests/test_guardrails.py`), sans appel API ni base de
+61 tests unitaires (`tests/test_guardrails.py`), sans appel API ni base de
 données : garde-fous du SQL Tool, priorité LangChain / repli direct Mistral
 pour la génération SQL, routeur (dont l'invariant needs_plot⇒needs_sql),
-PlotTool (dont le garde-fou anti-fabrication de données), et dégradation
+PlotTool (dont le garde-fou anti-fabrication de données, et la détection des
+valeurs `decimal.Decimal` renvoyées par PostgreSQL), et dégradation
 gracieuse de l'OCR sans clé.
 
 Le fichier `tests/test_questions.py` sert également de benchmark métier
@@ -699,7 +700,7 @@ python evaluate_ocr.py
 
 **Déjà livré** (initialement listé ici comme piste, réalisé depuis) :
 tests unitaires dédiés au routeur, au SQL Tool et aux garde-fous
-(`tests/test_guardrails.py`, 60 tests) ; fallback OCR Nanonets pour les
+(`tests/test_guardrails.py`, 61 tests) ; fallback OCR Nanonets pour les
 rapports scannés ; PlotTool pour la génération dynamique de graphiques ;
 migration du SQL Tool sur LangChain (`create_sql_query_chain`) et de la
 base de données sur PostgreSQL.

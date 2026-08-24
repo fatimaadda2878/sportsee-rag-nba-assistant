@@ -339,6 +339,26 @@ class TestPlotToolNoDataFabrication:
         with pytest.raises(ValueError):
             _extract_labels_and_values(sql_output)
 
+    def test_extracts_numeric_column_when_values_are_decimal(self):
+        # Régression corrigée le 24/08/2026 : psycopg2 (PostgreSQL) renvoie les
+        # colonnes NUMERIC/DECIMAL (ex. résultat de ROUND(...)) comme
+        # `decimal.Decimal`, pas `float` comme le fait SQLite pour la même
+        # requête. Sans ce cas, le PlotTool échouait silencieusement (aucune
+        # colonne numérique détectée) sur toute requête utilisant ROUND(),
+        # alors que la même question fonctionnait sur SQLite.
+        import decimal
+        sql_output = SQLToolOutput(
+            generated_sql="SELECT ...", row_count=2,
+            columns=["player_name", "pts_per_game"],
+            rows_preview=[
+                {"player_name": "Trae Young", "pts_per_game": decimal.Decimal("24.5")},
+                {"player_name": "Nikola Jokic", "pts_per_game": decimal.Decimal("22.1")},
+            ],
+        )
+        labels, values, value_col = _extract_labels_and_values(sql_output)
+        assert value_col == "pts_per_game"
+        assert values == [24.5, 22.1]
+
     def test_run_plot_tool_returns_error_when_sql_failed(self):
         sql_output = SQLToolOutput(generated_sql="", row_count=0, error="Donnée non disponible.")
         result = run_plot_tool("Montre un graphique", sql_output=sql_output)

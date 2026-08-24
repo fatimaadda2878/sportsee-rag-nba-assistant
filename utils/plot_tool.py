@@ -19,6 +19,7 @@ contredit la philosophie de sécurité du reste du projet.
 from __future__ import annotations
 
 import base64
+import decimal
 import io
 import logging
 import re
@@ -73,11 +74,21 @@ def _extract_labels_and_values(sql_output: SQLToolOutput) -> tuple[list[str], li
     columns = sql_output.columns
     label_col = None
     value_col = None
+    # NB (corrigé le 24/08/2026, régression PostgreSQL) : psycopg2 renvoie les
+    # colonnes NUMERIC/DECIMAL (notamment les résultats de ROUND(...)) comme
+    # `decimal.Decimal`, pas `float` — contrairement à SQLite qui renvoie des
+    # `float` natifs pour les mêmes requêtes. Sans `decimal.Decimal` dans ce
+    # test de type, aucune colonne numérique n'était détectée sur PostgreSQL,
+    # ce qui faisait échouer le PlotTool (et donc afficher un message
+    # contradictoire côté LLM : "pas de donnée numérique exploitable" tout en
+    # citant les mêmes chiffres juste après) alors que les mêmes questions
+    # fonctionnaient très bien sur SQLite.
+    _NUMERIC_TYPES = (int, float, decimal.Decimal)
     for col in columns:
         sample = rows[0].get(col)
         if label_col is None and isinstance(sample, str):
             label_col = col
-        elif value_col is None and isinstance(sample, (int, float)) and not isinstance(sample, bool):
+        elif value_col is None and isinstance(sample, _NUMERIC_TYPES) and not isinstance(sample, bool):
             value_col = col
 
     if value_col is None:

@@ -9,7 +9,7 @@ mistralai>=1.2.5,<2
 
 # --- Vector store & chunking ---
 faiss-cpu>=1.8.0
-numpy==1.26.4
+numpy>=1.26.4
 langchain==0.2.16
 langchain-core==0.2.38
 langchain-community==0.2.16
