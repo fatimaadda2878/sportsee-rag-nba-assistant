@@ -39,10 +39,14 @@ NAME = "NBA"  # Nom à personnaliser dans l'interface
 # ============================================================
 # --- Étape 2 : Base de données métier (players/matches/stats/reports) ---
 # ============================================================
-# Par défaut SQLite (fichier local, zéro configuration). Compatible PostgreSQL
-# en changeant simplement DATABASE_URL dans le .env, sans toucher au code
-# (SQLAlchemy abstrait le dialecte).
-SQL_DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///database/sportsee.db")
+# PostgreSQL est la base de données cible du projet (cf. consignes) : c'est la
+# valeur par défaut ci-dessous si DATABASE_URL n'est pas définie dans le .env.
+# SQLite reste disponible en dépannage (démo hors-ligne sans serveur) en
+# définissant DATABASE_URL="sqlite:///database/sportsee.db" dans le .env — le
+# code (SQLAlchemy) ne change pas, seul le dialecte de l'URL change.
+SQL_DATABASE_URL = os.getenv(
+    "DATABASE_URL", "postgresql+psycopg2://postgres:postgres@localhost:5432/sportsee"
+)
 
 # Chemin du fichier Excel source pour l'ingestion (Étape 2)
 EXCEL_SOURCE_FILE = os.getenv("EXCEL_SOURCE_FILE", "data/regular_NBA.xlsx")

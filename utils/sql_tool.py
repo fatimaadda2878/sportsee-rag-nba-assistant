@@ -5,13 +5,33 @@ l'exécute sur la base teams/player_season_stats/team_summary, et retourne un
 résultat structuré (validé par SQLToolOutput) que l'agent peut ensuite
 synthétiser.
 
-Sécurité : on n'exécute jamais la requête générée par le LLM telle quelle sans
-garde-fous :
+Génération NL -> SQL via LangChain (`create_sql_query_chain` + `SQLDatabase`
++ `ChatMistralAI`), conformément aux consignes du projet (retour de relecture
+de Sylvain, mentor, le 23/08/2026 : "le projet demande d'utiliser LangChain
+et d'utiliser un SQL Tool LangChain"). Un fallback vers l'appel direct au SDK
+Mistral (`generate_sql_direct_mistral`, l'implémentation d'origine) est
+conservé si l'initialisation de la chaîne LangChain échoue (import, DB
+injoignable...) — même philosophie de dégradation gracieuse que le routeur
+heuristique et le fallback OCR.
+
+Sécurité : quelle que soit la méthode de génération (LangChain ou fallback),
+on n'exécute JAMAIS la requête générée par le LLM telle quelle sans
+garde-fous — ceux-ci sont appliqués en post-traitement, après génération et
+avant toute exécution :
     - uniquement des requêtes SELECT (rejet de tout DML/DDL)
     - LIMIT forcé à SQL_TOOL_MAX_ROWS
     - la question d'entrée est validée par SQLToolInput (anti-injection basique)
     - détection explicite des questions hors périmètre des données (voir
       mécanisme NO_DATA ci-dessous)
+    - rejet des valeurs (noms de joueurs/équipes) halluciné(e)s absentes de
+      la question d'origine (_uses_only_values_from_question)
+
+Ce choix de conception (LangChain uniquement pour la GÉNÉRATION de la
+requête, jamais pour son EXÉCUTION) est délibéré : `create_sql_query_chain`
+renvoie une chaîne SQL sans l'exécuter, contrairement à `create_sql_agent`
+qui exécute lui-même la requête dans sa propre boucle d'agent — ce qui
+rendrait l'injection de nos garde-fous entre génération et exécution
+beaucoup plus difficile (voir Rapport_Evaluation_RAG.md).
 """
 from __future__ import annotations
 
@@ -21,7 +41,7 @@ import re
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 
-from .config import MODEL_NAME, SQL_TOOL_MAX_ROWS
+from .config import MODEL_NAME, SQL_TOOL_MAX_ROWS, MISTRAL_API_KEY
 from .db import get_engine
 from .schemas import SQLToolInput, SQLToolOutput
 from .observability import logfire
@@ -144,6 +164,50 @@ Règles strictes :
 Question : {question}
 SQL:"""
 
+# ============================================================
+# Prompt LangChain (utilisé par `create_sql_query_chain`, voie principale de
+# génération SQL — voir docstring du module).
+#
+# `create_sql_query_chain` exige un PromptTemplate exposant précisément les
+# variables 'input', 'top_k', 'table_info' (+ 'dialect' optionnelle, qu'il
+# renseigne alors automatiquement avec `db.dialect`). Le texte du few-shot et
+# des règles métier (NO_DATA, cumuls saison vs moyenne/match...) est injecté
+# ici en dur (pas comme variable de template) pour rester strictement
+# identique à la voie de secours `generate_sql_direct_mistral`.
+# `table_info` est fourni dynamiquement par LangChain (introspection réelle
+# de la base via SQLAlchemy, colonnes + quelques lignes d'exemple) plutôt que
+# par la description statique SCHEMA_DESCRIPTION ci-dessus, qui reste
+# utilisée uniquement par la voie de secours.
+# ============================================================
+_LANGCHAIN_SQL_TEMPLATE = (
+    "Tu es un générateur de requêtes SQL (dialecte {dialect}) pour une base "
+    "de données de statistiques NBA agrégées sur la saison.\n\n"
+    "Tables disponibles (colonnes et exemples de lignes) :\n{table_info}\n\n"
+    "Notes importantes sur les données :\n"
+    "- pts_total, tpm, tpa, ast, reb, etc. sont des CUMULS SUR LA SAISON, pas "
+    "des moyennes par match. Pour une moyenne par match, diviser par "
+    "games_played (ex: pts_total * 1.0 / NULLIF(games_played, 0)).\n"
+    "- Aucune date de match, aucune notion de match individuel n'existe dans "
+    "cette base : impossible de répondre à \"sur les N derniers matchs\" ou "
+    "\"lors du dernier match\".\n"
+    "- Aucune colonne domicile/extérieur n'existe : impossible de comparer "
+    "\"à domicile\" vs \"à l'extérieur\".\n"
+    "- Si la question porte sur une donnée absente de la base (match par "
+    "match, date précise, domicile/extérieur), réponds EXACTEMENT au format "
+    "\"NO_DATA: <raison courte>\" au lieu d'une requête SQL. Ne tente jamais "
+    "d'approximer avec une autre colonne.\n\n"
+    "Exemples de questions et requêtes correspondantes :\n"
+    f"{FEW_SHOT_EXAMPLES}\n\n"
+    "Règles strictes :\n"
+    "- Réponds UNIQUEMENT avec la requête SQL, sans texte autour, sans "
+    "balises markdown.\n"
+    "- Une seule instruction SELECT (jamais INSERT/UPDATE/DELETE/DROP/ALTER).\n"
+    "- Utilise toujours des JOIN explicites avec des alias clairs.\n"
+    "- Limite le résultat à environ {top_k} lignes si la question ne "
+    "précise pas de borne.\n\n"
+    "{input}"
+)
+
 
 _FORBIDDEN_KEYWORDS = re.compile(
     r"\b(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|ATTACH|PRAGMA|REPLACE)\b", re.IGNORECASE
@@ -204,8 +268,57 @@ def _uses_only_values_from_question(sql: str, question: str) -> bool:
     return True
 
 
-def generate_sql(question: str) -> str:
-    """Appelle le LLM pour générer la requête SQL correspondant à la question."""
+# ============================================================
+# Chaîne LangChain (voie principale de génération SQL)
+# ============================================================
+# Tables exposées au LLM via LangChain (on n'inclut pas `reports`, table
+# prête mais actuellement vide/non alimentée — inutile de la faire figurer
+# dans le schéma soumis au LLM, cf. `SCHEMA_DESCRIPTION` qui explique déjà
+# le choix pour la voie de secours).
+_LANGCHAIN_TABLES = ["teams", "player_season_stats", "team_summary"]
+
+_sql_chain = None  # singleton paresseux (même style que router._get_router_agent)
+
+
+def _get_sql_chain():
+    """Construit (une seule fois) la chaîne LangChain `create_sql_query_chain`.
+
+    Réutilise l'engine SQLAlchemy déjà configuré par `utils.db.get_engine`
+    (donc le SQL_DATABASE_URL actif, PostgreSQL par défaut ou SQLite en
+    dépannage — voir utils/config.py) : LangChain n'ouvre pas sa propre
+    connexion séparée.
+    """
+    global _sql_chain
+    if _sql_chain is None:
+        # Imports différés : ces dépendances (LangChain + langchain-mistralai)
+        # ne sont nécessaires qu'ici, pas au chargement du module (cohérent
+        # avec le reste du projet — voir evaluate_ragas.py pour ragas/langchain).
+        from langchain.chains import create_sql_query_chain
+        from langchain_community.utilities import SQLDatabase
+        from langchain_core.prompts import PromptTemplate
+        from langchain_mistralai import ChatMistralAI
+
+        db = SQLDatabase(get_engine(), include_tables=_LANGCHAIN_TABLES, sample_rows_in_table_info=2)
+        llm = ChatMistralAI(model=MODEL_NAME, mistral_api_key=MISTRAL_API_KEY, temperature=0.0)
+        prompt = PromptTemplate.from_template(_LANGCHAIN_SQL_TEMPLATE)
+        _sql_chain = create_sql_query_chain(llm, db, prompt=prompt, k=SQL_TOOL_MAX_ROWS)
+    return _sql_chain
+
+
+def generate_sql_langchain(question: str) -> str:
+    """Génère la requête SQL via la chaîne LangChain `create_sql_query_chain`
+    (voie principale — voir docstring du module). Ne génère QUE la requête,
+    ne l'exécute jamais (l'exécution + les garde-fous restent gérés par
+    `run_sql_tool`, hors LangChain)."""
+    chain = _get_sql_chain()
+    raw_sql = chain.invoke({"question": question})
+    return _clean_generated_sql(raw_sql)
+
+
+def generate_sql_direct_mistral(question: str) -> str:
+    """Génère la requête SQL par appel direct au SDK Mistral (implémentation
+    d'origine, conservée comme repli si la chaîne LangChain échoue à
+    s'initialiser ou à répondre — voir docstring du module)."""
     prompt = SQL_GENERATION_PROMPT.format(
         schema=SCHEMA_DESCRIPTION, few_shot=FEW_SHOT_EXAMPLES, question=question
     )
@@ -215,6 +328,20 @@ def generate_sql(question: str) -> str:
         temperature=0.0,
     )
     return _clean_generated_sql(raw_sql)
+
+
+def generate_sql(question: str) -> str:
+    """Point d'entrée génération SQL : LangChain en priorité, repli
+    automatique sur l'appel direct Mistral en cas d'échec (import,
+    connexion DB, erreur LLM...) — jamais d'exception qui remonte."""
+    try:
+        sql = generate_sql_langchain(question)
+        logfire.info("sql_generation_method", method="langchain")
+        return sql
+    except Exception as e:
+        logger.warning(f"Génération SQL via LangChain indisponible, repli sur l'appel direct Mistral: {e}")
+        logfire.info("sql_generation_method", method="direct_mistral_fallback", langchain_error=str(e))
+        return generate_sql_direct_mistral(question)
 
 
 def run_sql_tool(question: str) -> SQLToolOutput:

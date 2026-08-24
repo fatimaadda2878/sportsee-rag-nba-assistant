@@ -24,6 +24,8 @@ Couverture :
     - utils.plot_tool                  : choix du type de graphique, garde-fou anti-fabrication
       de données (aucune valeur générée hors de rows_preview du SQL Tool)
     - utils.data_loader                : fallback OCR ne plante jamais sans clé API configurée
+    - utils.sql_tool (LangChain)       : génération SQL via LangChain en priorité, repli
+      automatique et transparent sur l'appel direct Mistral si LangChain échoue
 """
 from __future__ import annotations
 
@@ -32,6 +34,7 @@ from pydantic import ValidationError
 
 from utils.sql_tool import (
     _is_safe_select, _enforce_limit, _clean_generated_sql, _uses_only_values_from_question,
+    generate_sql, _LANGCHAIN_SQL_TEMPLATE, _LANGCHAIN_TABLES,
 )
 from utils.router import _heuristic_route, QueryRoute
 from utils.schemas import SQLToolInput, PlayerSeasonStatRow, SQLToolOutput
@@ -372,3 +375,60 @@ class TestOcrFallbackGracefulDegradation:
         monkeypatch.setattr("utils.data_loader.NANONETS_API_KEY", None)
         result = extract_text_with_ocr_nanonets("fichier_inexistant.pdf")
         assert result is None
+
+
+# ============================================================
+# utils.sql_tool : génération SQL via LangChain (voie principale, cf. retour
+# de relecture de Sylvain le 23/08/2026) + repli sur l'appel direct Mistral.
+#
+# Ces tests ne font ni appel réseau ni appel LangChain réel (monkeypatch des
+# fonctions de génération) : ils vérifient uniquement le CHOIX de la voie de
+# génération (LangChain en priorité, repli transparent en cas d'échec) et la
+# conformité du prompt LangChain, conformément à l'objectif du fichier
+# (aucun appel réseau/API requis pour lancer `pytest tests/`).
+# ============================================================
+
+class TestLangchainSqlGenerationPriority:
+    def test_uses_langchain_when_available(self, monkeypatch):
+        monkeypatch.setattr("utils.sql_tool.generate_sql_langchain", lambda q: "SELECT 1;")
+
+        def _should_not_be_called(q):
+            raise AssertionError("Le repli direct Mistral n'aurait pas dû être appelé")
+
+        monkeypatch.setattr("utils.sql_tool.generate_sql_direct_mistral", _should_not_be_called)
+        assert generate_sql("Question quelconque") == "SELECT 1;"
+
+    def test_falls_back_to_direct_mistral_on_langchain_error(self, monkeypatch):
+        def _raise(q):
+            raise RuntimeError("LangChain indisponible (simulation)")
+
+        monkeypatch.setattr("utils.sql_tool.generate_sql_langchain", _raise)
+        monkeypatch.setattr("utils.sql_tool.generate_sql_direct_mistral", lambda q: "SELECT 2;")
+        assert generate_sql("Question quelconque") == "SELECT 2;"
+
+
+class TestLangchainSqlPromptTemplate:
+    def test_reports_table_not_exposed_to_llm(self):
+        # `reports` est une table prête mais actuellement vide (non alimentée
+        # par load_excel_to_db.py) : inutile et potentiellement trompeur de
+        # l'exposer au LLM dans le schéma LangChain.
+        assert "reports" not in _LANGCHAIN_TABLES
+        assert set(_LANGCHAIN_TABLES) == {"teams", "player_season_stats", "team_summary"}
+
+    def test_prompt_has_required_langchain_variables(self):
+        langchain_core = pytest.importorskip("langchain_core")
+        from langchain_core.prompts import PromptTemplate
+
+        prompt = PromptTemplate.from_template(_LANGCHAIN_SQL_TEMPLATE)
+        # Variables exigées par `create_sql_query_chain` (voir sa docstring) :
+        # sans elles, la construction de la chaîne lève une ValueError.
+        assert {"input", "top_k", "table_info"}.issubset(set(prompt.input_variables))
+
+    def test_prompt_preserves_no_data_convention(self):
+        assert "NO_DATA:" in _LANGCHAIN_SQL_TEMPLATE
+
+    def test_prompt_preserves_season_totals_warning(self):
+        # Garde-fou métier historique : pts_total/ast/... sont des cumuls sur
+        # la saison, pas des moyennes par match (cf. FEW_SHOT_EXAMPLES et
+        # SCHEMA_DESCRIPTION) — doit rester présent dans le prompt LangChain.
+        assert "CUMULS SUR LA SAISON" in _LANGCHAIN_SQL_TEMPLATE

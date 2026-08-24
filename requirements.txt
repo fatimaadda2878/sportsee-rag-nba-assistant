@@ -8,7 +8,7 @@ python-dotenv==1.0.1
 mistralai>=1.2.5,<2
 
 # --- Vector store & chunking ---
-faiss-cpu==1.8.0
+faiss-cpu>=1.8.0
 numpy==1.26.4
 langchain==0.2.16
 langchain-core==0.2.38
@@ -28,10 +28,20 @@ griffe>=1.0
 
 # --- Observabilité ---
 logfire==0.51.0
+# Sous Python 3.12, la chaîne de dépendances de logfire (opentelemetry) importe
+# importlib.metadata via le package de compatibilité "importlib-metadata" sans
+# le déclarer explicitement dans tous les cas : sans cette ligne, les tests ne
+# démarrent pas (ImportError au collect de pytest). Ajouté le 23/08/2026 suite
+# à la relecture de Sylvain (mentor).
+importlib-metadata>=6.0
 
 # --- Base de données / SQL Tool ---
 SQLAlchemy==2.0.35
-# psycopg2-binary==2.9.9   # décommenter si PostgreSQL au lieu de SQLite
+# PostgreSQL (base de données cible du projet, cf. consignes) :
+psycopg2-binary==2.9.9
+# SQLite reste utilisable en local pour un test rapide sans serveur PostgreSQL
+# (changer uniquement DATABASE_URL dans .env - voir README.md) mais n'est plus
+# la configuration par défaut.
 
 # --- Ingestion Excel ---
 pandas==2.2.2

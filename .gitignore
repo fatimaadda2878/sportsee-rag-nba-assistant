@@ -45,9 +45,16 @@ logs/
 inputs/
 vector_db/
 database/*.db
-reports/*.csv
 data/ocr_test/
 data/plots/
+
+# Rapports RAGAS : ignorés par défaut (résultats intermédiaires), SAUF les
+# résultats finaux before/after versionnés comme preuve de l'évaluation
+# (demande de Sylvain, 23/08/2026) : voir reports/eval_before.csv et
+# reports/eval_after.csv, explicitement inclus ci-dessous.
+reports/*.csv
+!reports/eval_before.csv
+!reports/eval_after.csv
 
 # Jupyter Notebook
 .ipynb_checkpoints

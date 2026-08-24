@@ -24,8 +24,8 @@ Question utilisateur
    Routeur (Pydantic AI) ──► la question nécessite-t-elle des données chiffrées ?
         │                                    │
         ▼                                    ▼
-Recherche vectorielle (FAISS)          SQL Tool (NL → SQL few-shot)
-   sur les archives texte                sur la base SQLite
+Recherche vectorielle (FAISS)          SQL Tool (LangChain NL → SQL)
+   sur les archives texte              + garde-fous custom, sur PostgreSQL
         │                                    │
         └──────────────┬─────────────────────┘
                         ▼
@@ -38,9 +38,9 @@ Recherche vectorielle (FAISS)          SQL Tool (NL → SQL few-shot)
 | Composant | Rôle |
 |---|---|
 | `indexer.py` | Chunking (1500 caractères, 150 de chevauchement) + embeddings Mistral (`mistral-embed`) + index FAISS, à partir des archives texte de `inputs/` |
-| `load_excel_to_db.py` | Ingestion du fichier Excel source vers une base SQLite (`teams`, `player_season_stats`, `team_summary`, `reports`) |
+| `load_excel_to_db.py` | Ingestion du fichier Excel source vers une base PostgreSQL (`teams`, `player_season_stats`, `team_summary`, `reports`) |
 | `utils/router.py` | Détermine si une question nécessite le SQL Tool (routage Pydantic AI) |
-| `utils/sql_tool.py` | Génération de requêtes SQL few-shot + exécution sécurisée (garde-fous : `SQL_TOOL_MAX_ROWS`, détection des questions non répondables → `NO_DATA`) |
+| `utils/sql_tool.py` | Génération de requêtes SQL via LangChain (`create_sql_query_chain` + `ChatMistralAI`, repli automatique sur un appel direct Mistral) + exécution sécurisée (garde-fous : `SQL_TOOL_MAX_ROWS`, détection des questions non répondables → `NO_DATA`, anti-hallucination de valeurs) |
 | `utils/vector_store.py` | Recherche vectorielle (top-k=5) dans l'index FAISS |
 | `MistralChat.py` | Application Streamlit (UI + orchestration) |
 | `evaluate_ragas.py` | Script d'audit RAGAS, modes `before` (texte seul) et `after` (texte + SQL Tool) |
@@ -90,18 +90,22 @@ RAGAS s'appuie par défaut sur un LLM juge OpenAI. Ce projet n'utilisant que Mis
 
 ## 4. Résultats
 
-### 4.1 Tableau comparatif before / after
+### 4.1 Tableau comparatif before / after, avec seuils cibles
 
 `reports/eval_before.csv` et `reports/eval_after.csv` ont tous les deux été régénérés sur les **13 cas de test au complet, avec un score sur les 4 métriques pour les 13 questions des deux côtés (13/13, sans NaN)**. C'est la première comparaison de ce rapport strictement appariée, aussi bien au niveau des questions que des métriques.
 
-| Métrique | Before (n=13/13) | After (n=13/13) | Delta |
-|---|---|---|---|
-| faithfulness | 0,867 | 0,673 | -0,194 |
-| answer_relevancy | 0,295 | 0,581 | **+0,286** |
-| context_precision | 0,274 | 0,403 | **+0,129** |
-| context_recall | 0,346 | 0,577 | **+0,231** |
+**Seuils cibles retenus** : en l'absence de seuils imposés par le brief, les valeurs ci-dessous reprennent l'ordre de grandeur usuellement recommandé pour un système RAG jugé fiable en production (≥ 0,70 sur les 4 métriques, avec une exigence renforcée à 0,80 sur `faithfulness` compte tenu du risque d'hallucination sur un chatbot d'analyse de données chiffrées). Ils servent de repère d'interprétation, pas de critère de blocage automatique — voir l'analyse sous le tableau.
+
+| Métrique | Seuil cible | Before (n=13/13) | After (n=13/13) | Delta | Seuil atteint (after) ? |
+|---|---|---|---|---|---|
+| faithfulness | ≥ 0,80 | 0,867 ✅ | 0,673 | -0,194 | ❌ |
+| answer_relevancy | ≥ 0,70 | 0,295 ❌ | 0,581 | **+0,286** | ❌ |
+| context_precision | ≥ 0,70 | 0,274 ❌ | 0,403 | **+0,129** | ❌ |
+| context_recall | ≥ 0,70 | 0,346 ❌ | 0,577 | **+0,231** | ❌ |
 
 Les 4 métriques bougent dans le sens attendu par rapport aux runs intermédiaires (voir 4.3) : `answer_relevancy`, `context_precision` et `context_recall` progressent tous nettement en mode `after`, confirmant l'apport du SQL Tool. `faithfulness` reste plus élevée en `before` (0,867 vs 0,673), et l'écart se creuse légèrement par rapport au run précédent (-0,112 → -0,194) : contre-intuitivement, corriger T06 fait *baisser* la faithfulness moyenne, car la nouvelle réponse correcte (demande de clarification) est moins bien notée par RAGAS que l'ancienne réponse fautive mais fidèle à son (mauvais) contexte SQL — même phénomène que sur T08/T09, détaillé ci-dessous.
+
+**Lecture honnête par rapport aux seuils** : aucune métrique n'atteint son seuil cible en mode `after` sur ce jeu de 13 questions. Deux facteurs limitent directement la portée de ce résultat, tous deux documentés en 4.2 : (1) RAGAS note très mal les réponses de refus légitimes (`NO_DATA`, T08/T09) et les demandes de clarification (T06 corrigé) — 4 des 13 cas sur 13 sont volontairement conçus pour déclencher ce type de réponse, ce qui tire mécaniquement `faithfulness` et `answer_relevancy` vers le bas alors que le comportement métier est correct ; (2) l'échantillon (13 questions) est trop restreint pour une mesure stable au sens statistique — voir la variance entre runs intermédiaires en 4.3. La progression relative (`answer_relevancy` +0,286, `context_recall` +0,231, `context_precision` +0,129) reste néanmoins le signal le plus fiable de ce rapport : elle démontre l'apport du SQL Tool indépendamment du seuil absolu. Pour une mise en production, ce rapport recommande un jeu de test élargi (50+ questions) et une métrique de type "taux de refus correctement identifiés" en complément de RAGAS, qui n'est pas conçu pour évaluer ce cas.
 
 ### 4.2 Analyse détaillée (exemples vérifiés ligne par ligne dans les CSV)
 
@@ -215,12 +219,56 @@ Résultat mesuré le 21/08/2026 (`reports/ocr_before_after.csv`) : le cas « ava
 
 **Implémentation** : `utils/plot_tool.py` génère un graphique (barres, courbe ou camembert) lorsqu'une visualisation est explicitement demandée (`route.needs_plot`, ajouté au routeur `QueryRoute`).
 
-**Choix de conception, et écart assumé par rapport au brief initial** : le brief suggérait un Tool LangChain généraliste, appelé par un agent qui structure lui-même les données à tracer. Le projet n'utilisant pas d'architecture d'agent LangChain (le routage repose sur Pydantic AI, voir section 2), et pour ne pas ouvrir un second point d'hallucination de données à côté du SQL Tool déjà sécurisé, le PlotTool a été conçu pour **réutiliser exclusivement les lignes déjà validées et retournées par le SQL Tool** : aucune valeur numérique n'est générée par un appel LLM. Seul le *type* de graphique est déterminé, par une heuristique de mots-clés sans appel API (même principe que le fallback heuristique du routeur, `utils/router.py::_heuristic_route`) — un choix de fiabilité délibéré, en particulier avant une démonstration en direct.
+**Choix de conception** : contrairement au SQL Tool (section 9.1, qui utilise LangChain pour la génération NL → SQL), le PlotTool n'appelle pas de chaîne LangChain — et ce délibérément, pour ne pas ouvrir un second point d'hallucination de données à côté du SQL Tool déjà sécurisé. Le PlotTool a été conçu pour **réutiliser exclusivement les lignes déjà validées et retournées par le SQL Tool** : aucune valeur numérique n'est générée par un nouvel appel LLM. Seul le *type* de graphique est déterminé, par une heuristique de mots-clés sans appel API (même principe que le fallback heuristique du routeur, `utils/router.py::_heuristic_route`) — un choix de fiabilité délibéré, en particulier avant une démonstration en direct.
 
 Testé unitairement (`tests/test_guardrails.py::TestPlotToolChartType`, `TestPlotToolNoDataFabrication`) : choix du type de graphique, extraction des colonnes label/valeur, et surtout — le garde-fou central — retour d'une erreur explicite plutôt qu'un graphique fabriqué lorsque le SQL Tool n'a pas de donnée exploitable.
 
 
 **Correctif** : ajout d'un `@model_validator` sur `QueryRoute` (`utils/router.py`) forçant `needs_sql=True` dès que `needs_plot=True`, comme invariant du modèle plutôt que comme simple consigne de prompt — donc garanti quelle que soit la source de la décision (LLM ou heuristique de repli). Un second test manuel sur la même question a confirmé la cohérence texte/graphique après correction ; 2 tests de non-régression ajoutés (`TestQueryRoutePlotRequiresSql`), portant le total à 54 tests. Un fix similaire a également été apporté au prompt de génération (`format_plot_context` dans `MistralChat.py`) : sans cette information, le LLM ignorait qu'un graphique serait affiché sous sa réponse et affirmait à tort ne pas pouvoir en produire un.
+
+## 9. Corrections apportées suite à la relecture du mentor (23/08/2026)
+
+Une relecture du dépôt et des diapositives par Sylvain (mentor) a identifié cinq points à corriger avant la soutenance. Chacun est traité ci-dessous, avec la justification technique correspondante.
+
+### 9.1 SQL Tool : migration vers LangChain
+
+**Retour** : le SQL Tool utilisait un appel direct au SDK Mistral pour la génération NL → SQL, sans passer par LangChain, alors que le projet demande explicitement un Tool SQL LangChain.
+
+**Correction** : `utils/sql_tool.py::generate_sql` utilise désormais en priorité `create_sql_query_chain` (LangChain) associé à `SQLDatabase` (introspection réelle du schéma PostgreSQL via SQLAlchemy) et `ChatMistralAI` (`langchain-mistralai`, déjà une dépendance du projet pour le juge RAGAS). Un repli automatique et transparent sur l'appel direct au SDK Mistral (`generate_sql_direct_mistral`, l'implémentation d'origine) est conservé en cas d'échec d'initialisation ou d'exécution de la chaîne LangChain — même philosophie de dégradation gracieuse que le routeur heuristique (section 2) et le fallback OCR (section 8.1).
+
+**Choix architectural assumé** : LangChain est utilisé uniquement pour la *génération* de la requête SQL, jamais pour son *exécution*. `create_sql_query_chain` renvoie une chaîne de caractères SQL sans l'exécuter — contrairement à `create_sql_agent`, qui exécute lui-même la requête dans sa propre boucle d'agent. Utiliser `create_sql_agent` aurait rendu beaucoup plus difficile l'application des garde-fous de sécurité existants et déjà validés (`_is_safe_select`, `_uses_only_values_from_question`, `_enforce_limit`, détection `NO_DATA`) : ceux-ci restent appliqués tels quels, en post-traitement, entre la génération LangChain et l'exécution SQLAlchemy — aucun garde-fou n'a été affaibli ou contourné par cette migration.
+
+Testé unitairement (`tests/test_guardrails.py::TestLangchainSqlGenerationPriority`, `TestLangchainSqlPromptTemplate`) : priorité de la voie LangChain, repli transparent en cas d'échec, présence des variables de prompt exigées par `create_sql_query_chain`, préservation des règles métier (cumuls saison, convention `NO_DATA`) dans le nouveau prompt.
+
+### 9.2 Base de données : migration vers PostgreSQL
+
+**Retour** : le projet et les diapositives présentaient SQLite comme base de données, alors que PostgreSQL est la base attendue.
+
+**Correction** : `SQL_DATABASE_URL` (dans `utils/config.py`) a désormais pour valeur par défaut une URL PostgreSQL (`postgresql+psycopg2://...`), et `psycopg2-binary` est décommenté dans `requirements.txt`. Le schéma relationnel (`utils/db.py`) était déjà conçu pour être agnostique du dialecte SQL (SQLAlchemy) : **aucune modification du code ORM n'a été nécessaire**, seule la configuration a changé. SQLite reste disponible en dépannage (démo hors-ligne sans serveur disponible) en changeant uniquement `DATABASE_URL` dans `.env`, sans toucher au code.
+
+**Validation** : la migration a été testée de bout en bout (ingestion complète de `regular_NBA.xlsx` — 30 équipes, 569 joueurs, 30 résumés d'équipe — puis requêtage) sur une instance PostgreSQL réelle avant d'être considérée comme fonctionnelle, et non uniquement sur la base d'une lecture du code.
+
+### 9.3 Résultats RAGAS versionnés dans le dépôt
+
+**Retour** : les CSV de résultats RAGAS annoncés dans `reports/` étaient ignorés par Git (`.gitignore`), donc absents du dépôt malgré leur mention dans le rapport.
+
+**Correction** : `.gitignore` exclut toujours les CSV intermédiaires de `reports/` par défaut (résultats de développement, non pertinents une fois le rapport final rédigé), à l'exception explicite de `reports/eval_before.csv` et `reports/eval_after.csv` — les résultats finaux before/after cités en section 4, désormais versionnés comme preuve de l'évaluation.
+
+### 9.4 Seuils RAGAS explicites
+
+**Retour** : les résultats RAGAS étaient comparés avant/après, mais sans seuil ou objectif cible défini pour chaque métrique — point explicitement attendu dans les critères d'évaluation.
+
+**Correction** : voir la section 4 (Résultats), qui définit désormais un seuil cible par métrique (faithfulness, answer_relevancy, context_precision, context_recall) et positionne explicitement les résultats mesurés par rapport à ces seuils, plutôt qu'une simple comparaison relative avant/après.
+
+### 9.5 Compatibilité Python 3.12
+
+**Retour** : sous Python 3.12, `pytest` ne démarre pas avec le `requirements.txt` existant (dépendance manquante liée à Logfire/OpenTelemetry).
+
+**Correction** : ajout de `importlib-metadata>=6.0` dans `requirements.txt` (section Observabilité), à côté de `logfire==0.51.0`.
+
+### 9.6 Diapositive d'architecture et capture Logfire
+
+La diapositive d'architecture a été mise à jour pour refléter LangChain (SQL Tool) et PostgreSQL (voir `Soutenance_SportSee_contenu_slides.md`). Une capture d'écran du tableau de bord Logfire, explicitement attendue pendant la soutenance, doit être ajoutée : voir la note dans les diapositives — cette capture doit être prise depuis le compte Logfire réel (démonstration en direct pendant la soutenance recommandée si le temps le permet, en complément ou à la place d'une capture statique).
 
 ## Annexe — Jeu de questions de test complet
 

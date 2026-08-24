@@ -66,8 +66,9 @@ Le projet compare ainsi deux approches :
                      ▼                                 ▼
           ┌─────────────────────┐           ┌─────────────────────┐
           │  Recherche texte    │           │      SQL Tool       │
-          │ Mistral embeddings  │           │   NL → SQL sécurisé│
-          │       FAISS         │           │       SQLite        │
+          │ Mistral embeddings  │           │ LangChain NL → SQL  │
+          │       FAISS         │           │  + garde-fous custom │
+          │                     │           │     PostgreSQL       │
           └──────────┬──────────┘           └──────────┬──────────┘
                      │                                 │
                      └────────────────┬────────────────┘
@@ -95,8 +96,12 @@ Le projet compare ainsi deux approches :
     un graphique (`needs_sql`, `needs_text_context`, `needs_plot`).
 3.  Si nécessaire, la recherche vectorielle récupère jusqu'à **5
     chunks** pertinents dans FAISS.
-4.  Pour une question statistique, `sql_tool.py` génère puis exécute une
-    requête SQL sécurisée.
+4.  Pour une question statistique, `sql_tool.py` génère la requête SQL via
+    LangChain (`create_sql_query_chain` + `ChatMistralAI`, avec repli
+    automatique sur un appel direct au SDK Mistral si LangChain échoue),
+    applique ses garde-fous de sécurité personnalisés (SELECT uniquement,
+    LIMIT forcé, anti-hallucination de valeurs...), puis exécute la requête
+    validée.
 5.  Si un graphique est explicitement demandé, `plot_tool.py` génère un
     graphique (barres/courbe/camembert) à partir des lignes déjà
     retournées par le SQL Tool (voir section PlotTool ci-dessous).
@@ -117,8 +122,9 @@ Le projet compare ainsi deux approches :
   Embeddings                `mistral-embed`
   Vector store              FAISS
   Routage                   Pydantic AI
+  SQL Tool (génération)     LangChain (`create_sql_query_chain` + `ChatMistralAI`)
   Validation                Pydantic
-  Base structurée           SQLite + SQLAlchemy
+  Base structurée           PostgreSQL + SQLAlchemy (SQLite en dépannage)
   Traitement de données     Pandas / OpenPyXL
   Évaluation                RAGAS
   Juge RAGAS                Mistral via `langchain-mistralai`
@@ -137,7 +143,7 @@ sportsee-rag-nba-assistant/
 │
 ├── MistralChat.py              # Application Streamlit
 ├── indexer.py                  # Construction de l'index FAISS
-├── load_excel_to_db.py         # Ingestion Excel → SQLite
+├── load_excel_to_db.py         # Ingestion Excel → PostgreSQL
 ├── evaluate_ragas.py           # Évaluation comparative RAGAS
 ├── evaluate_ocr.py             # Évaluation avant/après du fallback OCR
 │
@@ -660,7 +666,7 @@ Puis renseigner les variables nécessaires :
 MISTRAL_API_KEY="..."
 LOGFIRE_TOKEN=""
 LOGFIRE_DISABLE=false
-DATABASE_URL="sqlite:///database/sportsee.db"
+DATABASE_URL="postgresql+psycopg2://postgres:postgres@localhost:5432/sportsee"
 NANONETS_API_KEY=""
 ```
 
@@ -674,6 +680,44 @@ scannés) est simplement désactivé, sans erreur. Compte gratuit :
 <https://docstrange.nanonets.com> (clé dans le menu en haut à droite une
 fois connecté — attention, différent de l'ancienne page
 `app.nanonets.com/#/keys`, incompatible avec l'API actuelle).
+
+### PostgreSQL : mettre en place la base
+
+PostgreSQL est la base de données cible du projet. Deux façons de l'obtenir :
+
+**Option A — installation locale (Windows) :**
+1. Télécharger et installer PostgreSQL : <https://www.postgresql.org/download/windows/>
+   (garder le port par défaut `5432` et noter le mot de passe choisi pour
+   l'utilisateur `postgres`).
+2. Créer la base vide, avec `psql` (fourni par l'installeur) ou pgAdmin :
+
+``` sql
+CREATE DATABASE sportsee;
+```
+
+3. Adapter `DATABASE_URL` dans `.env` avec le mot de passe choisi à
+   l'installation.
+
+**Option B — PostgreSQL hébergé gratuitement (aucune installation) :**
+Créer une base gratuite sur [Neon](https://neon.tech) ou
+[Supabase](https://supabase.com), puis copier l'URI de connexion fournie
+dans `DATABASE_URL` (format
+`postgresql+psycopg2://user:password@host:5432/dbname`).
+
+Une fois la base créée (option A ou B), lancer l'ingestion :
+
+``` bash
+python load_excel_to_db.py --excel-file data/regular_NBA.xlsx
+```
+
+Ce script crée automatiquement les tables (`teams`, `player_season_stats`,
+`team_summary`, `reports`) si elles n'existent pas encore — aucune
+migration SQL manuelle n'est nécessaire.
+
+**Dépannage / démo hors-ligne sans serveur PostgreSQL disponible :** le
+code (SQLAlchemy) reste compatible SQLite sans aucune modification, il
+suffit de définir `DATABASE_URL="sqlite:///database/sportsee.db"` dans
+`.env`.
 
 ------------------------------------------------------------------------
 
@@ -723,10 +767,11 @@ Lancer les tests avec :
 pytest tests/
 ```
 
-54 tests unitaires (`tests/test_guardrails.py`), sans appel API ni base de
-données : garde-fous du SQL Tool, routeur (dont l'invariant
-needs_plot⇒needs_sql), PlotTool (dont le garde-fou anti-fabrication de
-données), et dégradation gracieuse de l'OCR sans clé.
+60 tests unitaires (`tests/test_guardrails.py`), sans appel API ni base de
+données : garde-fous du SQL Tool, priorité LangChain / repli direct Mistral
+pour la génération SQL, routeur (dont l'invariant needs_plot⇒needs_sql),
+PlotTool (dont le garde-fou anti-fabrication de données), et dégradation
+gracieuse de l'OCR sans clé.
 
 Le fichier `tests/test_questions.py` sert également de benchmark métier
 à l'évaluation RAGAS.
@@ -744,8 +789,10 @@ python evaluate_ocr.py
 
 **Déjà livré** (initialement listé ici comme piste, réalisé depuis) :
 tests unitaires dédiés au routeur, au SQL Tool et aux garde-fous
-(`tests/test_guardrails.py`, 54 tests) ; fallback OCR Nanonets pour les
-rapports scannés ; PlotTool pour la génération dynamique de graphiques.
+(`tests/test_guardrails.py`, 60 tests) ; fallback OCR Nanonets pour les
+rapports scannés ; PlotTool pour la génération dynamique de graphiques ;
+migration du SQL Tool sur LangChain (`create_sql_query_chain`) et de la
+base de données sur PostgreSQL.
 
 Pistes restantes :
 
