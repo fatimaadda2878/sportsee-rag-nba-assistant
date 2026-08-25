@@ -420,12 +420,12 @@ Quatre métriques sont calculées :
 Comparaison finale, strictement appariée sur les 13 cas de
 test et les 4 métriques, sans valeur manquante des deux côtés :
 
-  Métrique              Before --- texte seul   After --- routage + SQL   Évolution
-  ------------------- ----------------------- ------------------------- -----------
-  Faithfulness                       **0,867**                     0,757       -0,110
-  Answer Relevancy                       0,295                 **0,535**   **+0,240**
-  Context Precision                      0,274                 **0,366**   **+0,092**
-  Context Recall                         0,346                 **0,615**   **+0,269**
+| Métrique | Before — texte seul | After — routage + SQL | Évolution |
+|---|---|---|---|
+| Faithfulness | **0,867** | 0,770 | -0,097 |
+| Answer Relevancy | 0,295 | **0,521** | **+0,226** |
+| Context Precision | 0,274 | **0,379** | **+0,105** |
+| Context Recall | 0,346 | **0,577** | **+0,231** |
 
 Détail complet des reproductions de run, des cas de figure et de
 l'analyse question par question : voir `Rapport_Evaluation_RAG.md`
@@ -437,16 +437,16 @@ L'ajout du routage et du SQL Tool améliore fortement la **pertinence des
 réponses**, le **rappel** et la **précision du contexte** :
 
 ``` text
-Answer Relevancy  : 0,295 → 0,535
-Context Recall    : 0,346 → 0,615
-Context Precision : 0,274 → 0,366
+Answer Relevancy  : 0,295 → 0,521
+Context Recall    : 0,346 → 0,577
+Context Precision : 0,274 → 0,379
 ```
 
 Le système enrichi récupère donc mieux les informations nécessaires,
 notamment pour les questions chiffrées pour lesquelles une recherche
 textuelle seule est insuffisante.
 
-La **Faithfulness** diminue en revanche (0,867 → 0,757). Cette baisse a
+La **Faithfulness** diminue en revanche (0,867 → 0,770). Cette baisse a
 été analysée cas par cas (voir `Rapport_Evaluation_RAG.md`, section 4.2)
 et s'explique presque entièrement par une limite du juge RAGAS sur les
 réponses de refus/clarification (`NO_DATA`, cas `T08`/`T09`/`T06`) et sur
@@ -461,8 +461,7 @@ mesure.
 
 ### Couverture before / after
 
-Après plusieurs itérations (voir `Rapport_Evaluation_RAG.md`, section
-4.3), les CSV `before` et `after` couvrent désormais les mêmes 13 cas de
+Les CSV `before` et `after` couvrent les mêmes 13 cas de
 test, sur les 4 métriques, sans valeur manquante — la comparaison
 ci-dessus est donc strictement appariée.
 
