@@ -141,11 +141,13 @@ Le projet compare ainsi deux approches :
 ``` text
 sportsee-rag-nba-assistant/
 │
-├── MistralChat.py              # Application Streamlit
-├── indexer.py                  # Construction de l'index FAISS
-├── load_excel_to_db.py         # Ingestion Excel → PostgreSQL
-├── evaluate_ragas.py           # Évaluation comparative RAGAS
-├── evaluate_ocr.py             # Évaluation avant/après du fallback OCR
+├── MistralChat.py              # Application Streamlit (point d'entrée)
+│
+├── scripts/                    # Scripts en ligne de commande (python -m scripts.<nom>)
+│   ├── indexer.py              # Construction de l'index FAISS
+│   ├── load_excel_to_db.py     # Ingestion Excel → PostgreSQL
+│   ├── evaluate_ragas.py       # Évaluation comparative RAGAS
+│   └── evaluate_ocr.py         # Évaluation avant/après du fallback OCR
 │
 ├── utils/
 │   ├── config.py               # Configuration centralisée
@@ -164,7 +166,12 @@ sportsee-rag-nba-assistant/
 │   └── test_guardrails.py      # Tests unitaires pytest (SQL Tool, routeur, PlotTool, OCR)
 │
 ├── docs/
+│   ├── Rapport_Evaluation_RAG.md  # Rapport d'évaluation RAGAS avant/après
 │   └── sql_examples.md         # Schéma et exemples SQL
+│
+├── reports/
+│   ├── eval_before.csv         # Résultats RAGAS (texte seul)
+│   └── eval_after.csv          # Résultats RAGAS (texte + SQL Tool)
 │
 ├── data/
 │   └── regular_NBA.xlsx        # Données NBA structurées
@@ -195,7 +202,7 @@ exécution propre de `load_excel_to_db.py`).
 ℹ️ **Ingestion idempotente** : `load_player_season_stats` vide la table
 `player_season_stats` avant chaque réinsertion (pas de clé métier naturelle
 sur cette table, uniquement un identifiant auto-incrémenté). Relancer
-`python load_excel_to_db.py` plusieurs fois ne duplique donc jamais les
+`python -m scripts.load_excel_to_db` plusieurs fois ne duplique donc jamais les
 lignes.
 
 ### ⚠️ Granularité des données
@@ -334,7 +341,7 @@ enregistré en PDF sans couche de texte) afin de produire une évaluation
 avant/après honnête et reproductible :
 
 ```
-python evaluate_ocr.py
+python -m scripts.evaluate_ocr
 ```
 
 Résultats écrits dans `reports/ocr_before_after.csv` (score de similarité
@@ -372,7 +379,7 @@ de test**.
 ### Mode `before`
 
 ``` bash
-python evaluate_ragas.py --mode before --output reports/eval_before.csv
+python -m scripts.evaluate_ragas --mode before --output reports/eval_before.csv
 ```
 
 Évalue la baseline basée sur la recherche vectorielle textuelle.
@@ -380,7 +387,7 @@ python evaluate_ragas.py --mode before --output reports/eval_before.csv
 ### Mode `after`
 
 ``` bash
-python evaluate_ragas.py --mode after --output reports/eval_after.csv
+python -m scripts.evaluate_ragas --mode after --output reports/eval_after.csv
 ```
 
 Évalue le pipeline enrichi avec routage et SQL Tool.
@@ -428,7 +435,7 @@ test et les 4 métriques, sans valeur manquante des deux côtés :
 | Context Recall | 0,346 | **0,577** | **+0,231** |
 
 Détail complet des reproductions de run, des cas de figure et de
-l'analyse question par question : voir `Rapport_Evaluation_RAG.md`
+l'analyse question par question : voir `docs/Rapport_Evaluation_RAG.md`
 (sections 4 et 5).
 
 ### Interprétation
@@ -447,7 +454,7 @@ notamment pour les questions chiffrées pour lesquelles une recherche
 textuelle seule est insuffisante.
 
 La **Faithfulness** diminue en revanche (0,867 → 0,770). Cette baisse a
-été analysée cas par cas (voir `Rapport_Evaluation_RAG.md`, section 4.2)
+été analysée cas par cas (voir `docs/Rapport_Evaluation_RAG.md`, section 4.2)
 et s'explique presque entièrement par une limite du juge RAGAS sur les
 réponses de refus/clarification (`NO_DATA`, cas `T08`/`T09`/`T06`) et sur
 certaines réponses chiffrées courtes (`T07`) : RAGAS note plus sévèrement
@@ -610,7 +617,7 @@ dans `DATABASE_URL` (format
 Une fois la base créée (option A ou B), lancer l'ingestion :
 
 ``` bash
-python load_excel_to_db.py --excel-file data/regular_NBA.xlsx
+python -m scripts.load_excel_to_db --excel-file data/regular_NBA.xlsx
 ```
 
 Ce script crée automatiquement les tables (`teams`, `player_season_stats`,
@@ -631,7 +638,7 @@ suffit de définir `DATABASE_URL="sqlite:///database/sportsee.db"` dans
 Placer les documents textuels dans `inputs/`, puis :
 
 ``` bash
-python indexer.py
+python -m scripts.indexer
 ```
 
 ### 2. Charger les données NBA en base
@@ -651,7 +658,7 @@ mkdir database
 Puis lancer :
 
 ``` bash
-python load_excel_to_db.py --excel-file data/regular_NBA.xlsx
+python -m scripts.load_excel_to_db --excel-file data/regular_NBA.xlsx
 ```
 
 ### 3. Démarrer Streamlit
@@ -684,7 +691,7 @@ Pour évaluer concrètement l'apport du fallback OCR (avant/après, sur un
 document de test synthétique généré automatiquement) :
 
 ``` bash
-python evaluate_ocr.py
+python -m scripts.evaluate_ocr
 ```
 
 ------------------------------------------------------------------------

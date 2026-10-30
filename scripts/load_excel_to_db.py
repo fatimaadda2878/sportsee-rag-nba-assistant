@@ -1,4 +1,4 @@
-# load_excel_to_db.py
+# scripts/load_excel_to_db.py
 """
 Pipeline d'ingestion : Excel (regular_NBA.xlsx) -> validation Pydantic -> SQL.
 
@@ -35,7 +35,7 @@ le Tool SQL et l'agent sont conçus pour le signaler plutôt que d'halluciner
 une réponse (voir utils/sql_tool.py).
 
 Usage :
-    python load_excel_to_db.py --excel-file data/regular_NBA.xlsx
+    python -m scripts.load_excel_to_db --excel-file data/regular_NBA.xlsx
 """
 from __future__ import annotations
 

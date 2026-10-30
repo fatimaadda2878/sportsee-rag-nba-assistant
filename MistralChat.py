@@ -38,14 +38,14 @@ def get_vector_store_manager():
         manager = VectorStoreManager()
         if manager.index is None or not manager.document_chunks:
             st.error("L'index vectoriel ou les chunks n'ont pas pu être chargés.")
-            st.warning("Assurez-vous d'avoir exécuté 'python indexer.py' après avoir placé vos fichiers dans le dossier 'inputs'.")
+            st.warning("Assurez-vous d'avoir exécuté 'python -m scripts.indexer' après avoir placé vos fichiers dans le dossier 'inputs'.")
             logging.error("Index Faiss ou chunks non trouvés/chargés par VectorStoreManager.")
             return None
         logging.info(f"VectorStoreManager chargé avec succès ({manager.index.ntotal} vecteurs).")
         return manager
     except FileNotFoundError:
         st.error("Fichiers d'index ou de chunks non trouvés.")
-        st.warning("Veuillez exécuter 'python indexer.py' pour créer la base de connaissances.")
+        st.warning("Veuillez exécuter 'python -m scripts.indexer' pour créer la base de connaissances.")
         logging.error("FileNotFoundError lors de l'init de VectorStoreManager.")
         return None
     except Exception as e:

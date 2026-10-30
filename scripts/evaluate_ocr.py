@@ -1,5 +1,5 @@
 """
-evaluate_ocr.py — Évaluation avant/après du fallback OCR Nanonets.
+scripts/evaluate_ocr.py — Évaluation avant/après du fallback OCR Nanonets.
 
 Contexte (21/08/2026) : Sarah a demandé, dans le brief "aller plus loin", de
 remplacer EasyOCR par Nanonets OCR dans le pipeline d'ingestion des rapports
@@ -19,7 +19,7 @@ le texte extrait et le texte de référence — proxy simple du taux de
 reconnaissance, 0.0 (rien de correct) à 1.0 (extraction parfaite).
 
 Usage :
-    python evaluate_ocr.py
+    python -m scripts.evaluate_ocr
 Nécessite NANONETS_API_KEY dans .env pour la partie "après" (voir
 .env.example). Sans clé, le script s'exécute quand même et rapporte le score
 "après" comme égal au score "avant" (fallback non déclenché), ce qui est

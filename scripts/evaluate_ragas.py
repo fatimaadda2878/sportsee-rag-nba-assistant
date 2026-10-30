@@ -1,4 +1,4 @@
-# evaluate_ragas.py
+# scripts/evaluate_ragas.py
 """
 Script d'évaluation automatisé basé sur RAGAS.
 
@@ -20,13 +20,13 @@ utilisable pour construire le tableau comparatif avant/après de l'Étape 3.
 ⚠️ Prérequis pour une exécution réelle (non faite ici, voir README - sandbox
 indisponible au moment de la rédaction) :
     - MISTRAL_API_KEY valide dans .env
-    - Index Faiss construit (`python indexer.py`)
-    - Base SQL peuplée (`python load_excel_to_db.py`) pour le mode "after"
+    - Index Faiss construit (`python -m scripts.indexer`)
+    - Base SQL peuplée (`python -m scripts.load_excel_to_db`) pour le mode "after"
     - `pip install -r requirements.txt`
 
 Usage :
-    python evaluate_ragas.py --mode before --output reports/eval_before.csv
-    python evaluate_ragas.py --mode after  --output reports/eval_after.csv
+    python -m scripts.evaluate_ragas --mode before --output reports/eval_before.csv
+    python -m scripts.evaluate_ragas --mode after  --output reports/eval_after.csv
 """
 from __future__ import annotations
 
